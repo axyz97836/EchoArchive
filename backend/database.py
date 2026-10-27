@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS memory_cards (
     generated_from_revision INTEGER NOT NULL CHECK(generated_from_revision >= 1),
     review_state TEXT NOT NULL DEFAULT 'draft'
         CHECK(review_state IN ('draft','accepted','dismissed')),
+    model_provenance TEXT NOT NULL DEFAULT 'qwen2.5:1.5b',
     created_at TEXT NOT NULL
 );
 
@@ -99,10 +100,22 @@ def init_db(db_path: Optional[Path] = None) -> None:
             conn.execute("PRAGMA busy_timeout = 30000;")
         conn.executescript(SCHEMA_DDL)
 
-        # Record migration version 1
         now_utc = datetime.now(timezone.utc).isoformat()
+        # Record migration version 1
         conn.execute(
             "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (1, ?);",
+            (now_utc,)
+        )
+
+        # Migration version 2: ensure model_provenance exists on memory_cards
+        cursor = conn.execute("PRAGMA table_info(memory_cards);")
+        columns = [row[1] for row in cursor.fetchall()]
+        if "model_provenance" not in columns:
+            conn.execute(
+                "ALTER TABLE memory_cards ADD COLUMN model_provenance TEXT NOT NULL DEFAULT 'qwen2.5:1.5b';"
+            )
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (2, ?);",
             (now_utc,)
         )
         conn.commit()
