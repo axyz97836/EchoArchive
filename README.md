@@ -11,19 +11,22 @@ The speaker's recording is the authoritative source of truth; local open-weight 
 ## Challenge Context
 
 - **Challenge:** Hacktoberfest 2026, Week 4 — *Ghost in the Machine* (October 26–31, 2026)
-- **Current Milestone:** **Phase A: Foundation & Real Local AI Feasibility** (Verified)
+- **Current Milestone:** **Phase B: Secure Audio Ingestion, Transcription Jobs & SQLite Persistence** (Verified)
 - **Target OS:** macOS (Apple Silicon `arm64` verified on Apple M2; Linux conditional on verification)
 
 ---
 
-## Phase A Verification Status
+## Phase B Verification Status
 
-Phase A establishes the project foundation and provides empirical proof that real speech recognition and language model extraction operate fully offline on localhost without cloud APIs:
+Phase B converts the local transcription proof into a reliable, persistent audio ingestion and human review workflow:
 
-1. **Local Speech Recognition:** `whisper.cpp` (v1.9.5) with Metal GPU acceleration transcribes synthetic fictional test audio into millisecond-accurate timestamped segments.
-2. **Local Memory Extraction:** `Qwen2.5:1.5b` running via local Ollama (`http://127.0.0.1:11434`) generates structured memory cards adhering to a strict schema.
-3. **Traceable Grounding Gate:** The server-side evidence validator enforces that every cited source segment ID exists in the transcript and rejects unsupported claims or fabricated quotations.
-4. **Automated Test Suite:** 34 tests (33 deterministic unit tests + 1 live local inference test) passing.
+1. **Secure Ingestion Pipeline:** `POST /api/stories` enforces bounded chunk streaming (rejecting oversized uploads while reading rather than buffering), strict affirmative consent confirmation, 25 MiB file ceiling, 5-minute duration cap, decodability validation, and server-generated UUID storage (`data/media/{uuid}.{ext}`).
+2. **In-Process Transcription Worker:** Bounded queue with maximum concurrency of 1, persisted SQLite state, truthful stage reporting (`queued` -> `preparing` -> `transcribing` -> `saving` -> `succeeded`), actionable error codes, and subprocess timeout enforcement.
+3. **Startup Crash Recovery:** Automatically identifies stranded jobs on startup and marks them as `failed` with code `INTERRUPTED`, preserving original media and preventing partial duplicates.
+4. **Traceable Review & Revision Tracking:** `GET /api/stories/{id}/segments` provides chronological timestamped segments. `PATCH /api/stories/{id}/segments/{segment_id}` enables human correction with atomic optimistic concurrency control (`expected_revision`), incrementing `transcript_revision` and preserving the immutable machine-generated transcript in `data/original_transcripts/{story_id}.json`.
+5. **Seekable Audio Streaming:** `GET /api/stories/{id}/audio` provides seekable HTTP Range byte streaming for in-browser playback without path traversal.
+6. **Localhost Security Middleware:** Rejects untrusted browser Origin and Host headers on state-changing requests, eliminating localhost CSRF/rebinding attack surfaces.
+7. **Automated Test Suite:** 63 tests (62 deterministic tests + 1 live local inference test) passing.
 
 ---
 
@@ -87,15 +90,23 @@ Run the readiness inspector to verify installed binaries, models, and endpoints:
 python scripts/check_local_models.py
 ```
 
-### 4. Run the Real Local AI Proof of Concept
+### 4. Run the Real Local AI Proof of Concept (Phase A)
 
-Execute the end-to-end smoke demonstration. It generates a short fictional synthetic audio sample, transcribes it locally with `whisper-cli`, extracts memory cards via local `qwen2.5:1.5b`, validates citations, and tests anti-hallucination rejection gates:
+Execute the end-to-end Phase A smoke demonstration (whisper.cpp + local Qwen memory card extraction):
 
 ```bash
 python scripts/smoke_real_inference.py
 ```
 
-### 5. Run the Automated Test Suite
+### 5. Run the Phase B Ingestion, Job & Human Review Verification
+
+Execute the complete Phase B workflow (synthetic audio ingestion -> background job state transitions -> whisper.cpp transcription -> segment review -> human error correction ("Coastal Main" -> "coastal Maine") -> revision increment -> optimistic concurrency validation):
+
+```bash
+python scripts/smoke_phase_b_integration.py
+```
+
+### 6. Run the Automated Test Suite
 
 ```bash
 # Run all tests (deterministic and live inference)

@@ -18,6 +18,11 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -25,4 +30,4 @@ jobs:
 
       - name: Run deterministic tests
         run: |
-          pytest -v -m "not live"
+          pytest -vv --tb=short -m "not live"
