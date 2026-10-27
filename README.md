@@ -11,22 +11,23 @@ The speaker's recording is the authoritative source of truth; local open-weight 
 ## Challenge Context
 
 - **Challenge:** Hacktoberfest 2026, Week 4 — *Ghost in the Machine* (October 26–31, 2026)
-- **Current Milestone:** **Phase B: Secure Audio Ingestion, Transcription Jobs & SQLite Persistence** (Verified)
+- **Current Milestone:** **Phase D: Premium Frontend, Real Recording & Traceable Memory Experience** (Verified)
 - **Target OS:** macOS (Apple Silicon `arm64` verified on Apple M2; Linux conditional on verification)
 
 ---
 
-## Phase B Verification Status
+## Phase D Verification Status
 
-Phase B converts the local transcription proof into a reliable, persistent audio ingestion and human review workflow:
+Phase D delivers the complete user-facing EchoArchive web application featuring the approved **The Archive After Dark** visual design:
 
-1. **Secure Ingestion Pipeline:** `POST /api/stories` enforces bounded chunk streaming (rejecting oversized uploads while reading rather than buffering), strict affirmative consent confirmation, 25 MiB file ceiling, 5-minute duration cap, decodability validation, and server-generated UUID storage (`data/media/{uuid}.{ext}`).
-2. **In-Process Transcription Worker:** Bounded queue with maximum concurrency of 1, persisted SQLite state, truthful stage reporting (`queued` -> `preparing` -> `transcribing` -> `saving` -> `succeeded`), actionable error codes, and subprocess timeout enforcement.
-3. **Startup Crash Recovery:** Automatically identifies stranded jobs on startup and marks them as `failed` with code `INTERRUPTED`, preserving original media and preventing partial duplicates.
-4. **Traceable Review & Revision Tracking:** `GET /api/stories/{id}/segments` provides chronological timestamped segments. `PATCH /api/stories/{id}/segments/{segment_id}` enables human correction with atomic optimistic concurrency control (`expected_revision`), incrementing `transcript_revision` and preserving the immutable machine-generated transcript in `data/original_transcripts/{story_id}.json`.
-5. **Seekable Audio Streaming:** `GET /api/stories/{id}/audio` provides seekable HTTP Range byte streaming for in-browser playback without path traversal.
-6. **Localhost Security Middleware:** Rejects untrusted browser Origin and Host headers on state-changing requests, eliminating localhost CSRF/rebinding attack surfaces.
-7. **Automated Test Suite:** 63 tests (62 deterministic tests + 1 live local inference test) passing.
+1. **The Archive After Dark Design Foundation:** Crafted with approved palette tokens (Midnight Ink `#1B252B`, Aged Parchment `#F3E8D6`, Marigold Amber `#E5B65F`, Muted Burgundy `#8C4B4A`), editorial system serif headings, high-contrast readable controls, visible focus rings, and WCAG 2.2 AA best practices.
+2. **Screen 1: Home / Entry Experience:** Atmospheric landing experience explaining local-only guarantees, real-time readiness status badge, and clear calls to action without fake marketing testimonials.
+3. **Screen 2: Real Microphone Studio & Audio Ingest:** Browser microphone recording using `MediaRecorder` (detecting supported MIME types at runtime) with live Web Audio API signal level metering on HTML5 canvas, 5-minute duration cap, explicit consent checkbox, and file upload fallback (WAV, MP3, M4A, FLAC, OGG, WebM <= 25 MiB).
+4. **Screen 3: Transcription & Human Review:** Real background job status polling (`queued`, `transcribing`, `succeeded`), master HTML5 audio player with scrub bar and speed toggles, chronological transcript segments, segment-level playback seeking, inline human error correction with atomic optimistic concurrency (`expected_revision`), and explicit review confirmation (`POST /api/stories/{id}/review`).
+5. **Screen 4: Memory Extraction Pipeline:** Connects to local Qwen2.5 extraction API with truthful backend stage transitions (`queued`, `analyzing`, `validating`, `saving`, `succeeded`) and actionable recovery paths for offline Ollama or model errors.
+6. **Screen 5: Preserved Stories Archive:** Visual library of preserved stories with searchable filtering, duration, revision, and verified memory count badges.
+7. **Screen 6: Traceable Memory Cards:** The core experience—prominent memory titles, AI-generated summaries, themes, and **Verified Transcript Evidence** displayed on aged parchment with exact timestamps and "Listen to Spoken Passage" seeking buttons that trigger HTTP 206 byte-range audio playback with synchronized glow highlighting.
+8. **Automated Test Suite:** 77 tests (76 deterministic tests + 1 live local inference test) passing with 100% success.
 
 ---
 
@@ -106,10 +107,26 @@ Execute the complete Phase B workflow (synthetic audio ingestion -> background j
 python scripts/smoke_phase_b_integration.py
 ```
 
-### 6. Run the Automated Test Suite
+### 6. Launch the EchoArchive Web Application (Phase D)
+
+Start the local FastAPI server and open the web application:
 
 ```bash
-# Run all tests (deterministic and live inference)
+uvicorn backend.main:app --host 127.0.0.1 --port 8766
+```
+
+Then visit [http://127.0.0.1:8766](http://127.0.0.1:8766) in your browser to experience the full 6-screen journey:
+- **Home:** System readiness status and local AI verification.
+- **Record / Upload:** Microphone recording with live Web Audio level meter and affirmative consent.
+- **Transcript Review:** Chronological segments, inline human correction with optimistic concurrency, and review confirmation.
+- **Memory Extraction:** Stage stepper tracking local Qwen inference.
+- **Archive:** Preserved story library with verified memory counts.
+- **Traceable Memory Detail:** Memory cards citing grounded audio passages with click-to-seek playback.
+
+### 7. Run the Automated Test Suite
+
+```bash
+# Run all 77 tests (deterministic and live inference)
 pytest -v
 
 # Run only deterministic tests (with mocked external processes)

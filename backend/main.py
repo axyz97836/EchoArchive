@@ -1,5 +1,6 @@
 """FastAPI application for EchoArchive local-first backend."""
 
+import json
 import logging
 import shutil
 import sqlite3
@@ -15,6 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from backend.config import (
@@ -413,7 +415,7 @@ async def list_stories(
                 """
                 SELECT id, title, speaker_label, consent_confirmed_at, audio_relpath,
                        audio_media_type, audio_size_bytes, audio_duration_ms,
-                       transcript_revision, created_at, updated_at
+                       transcript_revision, transcript_reviewed_at, created_at, updated_at
                 FROM stories
                 WHERE title LIKE ? OR speaker_label LIKE ?
                 ORDER BY created_at DESC
@@ -429,7 +431,7 @@ async def list_stories(
                 """
                 SELECT id, title, speaker_label, consent_confirmed_at, audio_relpath,
                        audio_media_type, audio_size_bytes, audio_duration_ms,
-                       transcript_revision, created_at, updated_at
+                       transcript_revision, transcript_reviewed_at, created_at, updated_at
                 FROM stories
                 ORDER BY created_at DESC
                 LIMIT ? OFFSET ?;
@@ -440,6 +442,12 @@ async def list_stories(
         story_list = []
         for row in rows:
             story_dict = dict(row)
+            story_dict["is_reviewed"] = story_dict.get("transcript_reviewed_at") is not None
+            cards_count = conn.execute("SELECT COUNT(*) FROM memory_cards WHERE story_id = ?;", (story_dict["id"],)).fetchone()[0]
+            story_dict["memory_cards_count"] = cards_count
+            seg_count = conn.execute("SELECT COUNT(*) FROM transcript_segments WHERE story_id = ?;", (story_dict["id"],)).fetchone()[0]
+            story_dict["transcript_segments_count"] = seg_count
+
             # Fetch most recent job if one exists
             job_row = conn.execute(
                 """
@@ -457,7 +465,7 @@ async def list_stories(
 # Story Details Endpoint
 @app.get("/api/stories/{id}")
 async def get_story(id: str) -> Dict[str, Any]:
-    """Retrieve metadata, revision, and job status for a single story."""
+    """Retrieve metadata, revision, review state, and job status for a single story."""
     with get_db() as conn:
         row = conn.execute("SELECT * FROM stories WHERE id = ?;", (id,)).fetchone()
         if not row:
@@ -467,6 +475,12 @@ async def get_story(id: str) -> Dict[str, Any]:
             )
 
         story_dict = dict(row)
+        story_dict["is_reviewed"] = story_dict.get("transcript_reviewed_at") is not None
+        cards_count = conn.execute("SELECT COUNT(*) FROM memory_cards WHERE story_id = ?;", (id,)).fetchone()[0]
+        story_dict["memory_cards_count"] = cards_count
+        seg_count = conn.execute("SELECT COUNT(*) FROM transcript_segments WHERE story_id = ?;", (id,)).fetchone()[0]
+        story_dict["transcript_segments_count"] = seg_count
+
         job_row = conn.execute(
             """
             SELECT id, kind, status, stage, error_code, error_message, created_at, started_at, finished_at
@@ -714,10 +728,10 @@ async def update_transcript_segment(
         update_cursor = conn.execute(
             """
             UPDATE stories
-            SET transcript_revision = ?, updated_at = ?
+            SET transcript_revision = ?, transcript_reviewed_at = ?, updated_at = ?
             WHERE id = ? AND transcript_revision = ?;
             """,
-            (new_revision, now_utc, id, payload.expected_revision),
+            (new_revision, now_utc, now_utc, id, payload.expected_revision),
         )
         if update_cursor.rowcount == 0:
             return JSONResponse(
@@ -750,7 +764,42 @@ async def update_transcript_segment(
                 "user_edited": 1,
             },
             "transcript_revision": new_revision,
+            "transcript_reviewed_at": now_utc,
         }
+
+
+# Human Review Confirmation Endpoint
+@app.post("/api/stories/{id}/review")
+async def confirm_story_review(id: str) -> Dict[str, Any]:
+    """
+    Explicitly confirm that a story's transcript has been reviewed and approved by a human.
+    Enforces that transcript segments must exist before review confirmation is accepted.
+    """
+    with get_db() as conn:
+        story = conn.execute("SELECT * FROM stories WHERE id = ?;", (id,)).fetchone()
+        if not story:
+            return JSONResponse(
+                status_code=404,
+                content={"error": {"code": "STORY_NOT_FOUND", "message": f"Story '{id}' not found."}},
+            )
+
+        seg_count = conn.execute("SELECT COUNT(*) FROM transcript_segments WHERE story_id = ?;", (id,)).fetchone()[0]
+        if seg_count == 0:
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": "NO_TRANSCRIPT", "message": "Cannot confirm review for a story without transcript segments."}},
+            )
+
+        now_utc = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "UPDATE stories SET transcript_reviewed_at = ?, updated_at = ? WHERE id = ?;",
+            (now_utc, now_utc, id),
+        )
+
+        row = conn.execute("SELECT * FROM stories WHERE id = ?;", (id,)).fetchone()
+        story_dict = dict(row)
+        story_dict["is_reviewed"] = True
+        return story_dict
 
 
 # Memory Extraction Initiation Endpoint
@@ -1034,4 +1083,27 @@ async def get_phase_c_demo():
             content={"error": {"code": "NOT_FOUND", "message": "Demo harness file not found."}}
         )
     return FileResponse(path=DEMO_HTML_PATH, media_type="text/html")
+
+
+# Primary EchoArchive Web Application Endpoints
+STATIC_DIR = PROJECT_ROOT / "static"
+INDEX_HTML_PATH = STATIC_DIR / "index.html"
+
+
+@app.get("/", response_class=FileResponse)
+@app.get("/app", response_class=FileResponse)
+async def get_index():
+    """Serve the primary EchoArchive application."""
+    if not INDEX_HTML_PATH.exists():
+        return JSONResponse(
+            status_code=404,
+            content={"error": {"code": "NOT_FOUND", "message": "EchoArchive frontend index not found."}}
+        )
+    return FileResponse(path=INDEX_HTML_PATH, media_type="text/html")
+
+
+# Mount /static directory for styles, scripts, and media assets
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
 

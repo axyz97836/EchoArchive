@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EchoArchive — Local-First Speech Preservation & Traceable Memories</title>
+  <meta name="description" content="Preserve real spoken stories and make them accessible through traceable memories, grounded transcripts, and local AI.">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <a href="#mainContent" class="skip-link">Skip to main content</a>
+
+  <!-- Header & Navigation -->
+  <header class="app-header" role="banner">
+    <div class="header-container">
+      <div class="brand-section">
+        <a href="#home" class="brand-title" id="brandHomeLink" aria-label="EchoArchive Home">
+          <svg class="brand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            <line x1="12" x2="12" y1="19" y2="22"/>
+          </svg>
+          <span class="brand-name">EchoArchive</span>
+        </a>
+        <span class="brand-tagline">Stories fade. Their voices don't have to.</span>
+      </div>
+
+      <nav class="nav-controls" aria-label="Main Navigation">
+        <button type="button" class="nav-link-btn active" id="navHomeBtn" data-target="screenHome">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          Home
+        </button>
+        <button type="button" class="nav-link-btn" id="navRecordBtn" data-target="screenRecordUpload">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>
+          Record / Upload
+        </button>
+        <button type="button" class="nav-link-btn" id="navArchiveBtn" data-target="screenArchive">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+          Archive
+        </button>
+
+        <!-- System Readiness Badge -->
+        <div class="system-status-badge" id="systemStatusBadge" title="Local system readiness">
+          <span class="status-dot" id="statusDot" aria-hidden="true"></span>
+          <span id="statusLabel">Checking...</span>
+        </div>
+      </nav>
+    </div>
+  </header>
+
+  <!-- Main Content Landmark -->
+  <main id="mainContent" role="main">
+
+    <!-- Screen 1: Home / Entry Experience -->
+    <section id="screenHome" class="screen-view active" aria-labelledby="homeHeading">
+      <div class="hero-card">
+        <span class="hero-tag">Strictly Local-First Archival System</span>
+        <h1 id="homeHeading" class="hero-heading">Preserve Real Spoken Stories with Traceable Memories</h1>
+        <p class="hero-lead">
+          The original recording and human-reviewed transcript are the sole authorities.
+          Local AI serves strictly as an indexing assistant—extracting grounded memory cards where every insight cites verifiable audio passages.
+        </p>
+        <div class="hero-actions">
+          <button type="button" class="btn btn-primary" id="heroStartRecordBtn">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>
+            Start a Recording
+          </button>
+          <button type="button" class="btn btn-secondary" id="heroUploadBtn">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
+            Upload Audio Story
+          </button>
+          <button type="button" class="btn btn-outline-amber" id="heroBrowseArchiveBtn">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/></svg>
+            Browse Archive
+          </button>
+        </div>
+      </div>
+
+      <!-- Architectural Principles & Local Readiness -->
+      <div class="architecture-callout">
+        <div class="feature-box">
+          <div class="feature-icon-wrapper" aria-hidden="true">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/></svg>
+          </div>
+          <h2 class="feature-title">Zero Telemetry & Private</h2>
+          <p class="feature-desc">All transcription (whisper.cpp) and memory extraction (Qwen2.5) execute on localhost loopback. No cloud calls, no telemetry, no tracking.</p>
+        </div>
+
+        <div class="feature-box">
+          <div class="feature-icon-wrapper" aria-hidden="true">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" x2="8" y1="13" y2="13"/><line x1="16" x2="8" y1="17" y2="17"/></svg>
+          </div>
+          <h2 class="feature-title">Traceable Evidence</h2>
+          <p class="feature-desc">Every AI memory card cites valid transcript segments. Tap any quotation to seek and listen to the real voice in high fidelity.</p>
+        </div>
+
+        <div class="feature-box">
+          <div class="feature-icon-wrapper" aria-hidden="true">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          </div>
+          <h2 class="feature-title">Revision Safety</h2>
+          <p class="feature-desc">When you correct a transcript, memory cards dynamically reflect revision provenance so outdated interpretations are never mistaken for truth.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Screen 2: Record or Upload a Story -->
+    <section id="screenRecordUpload" class="screen-view" aria-labelledby="recordUploadHeading">
+      <div class="workflow-card">
+        <div class="workflow-header">
+          <h1 id="recordUploadHeading" class="feature-title" style="font-size: 1.6rem;">Preserve a Spoken Story</h1>
+          <div class="tab-group" role="tablist" aria-label="Ingestion method">
+            <button type="button" role="tab" aria-selected="true" class="tab-btn active" id="tabRecordBtn" aria-controls="panelRecord">
+              Microphone Studio
+            </button>
+            <button type="button" role="tab" aria-selected="false" class="tab-btn" id="tabUploadBtn" aria-controls="panelUpload">
+              Upload Audio File
+            </button>
+          </div>
+        </div>
+
+        <!-- Tab 1: Microphone Recording -->
+        <div id="panelRecord" role="tabpanel" aria-labelledby="tabRecordBtn">
+          <div class="recorder-box">
+            <div class="recording-status-indicator">
+              <span class="recording-pulse" id="recordPulse"></span>
+              <span id="recordStatusLabel">Microphone ready to initialize</span>
+            </div>
+
+            <div class="recording-timer" id="recordTimer" aria-live="off">00:00</div>
+            <div class="recording-limit-hint">Standard story maximum duration: 5 minutes (300s)</div>
+
+            <!-- Real-time Web Audio Signal Level Canvas -->
+            <canvas id="micMeterCanvas" class="meter-canvas" width="420" height="64" aria-label="Live microphone audio signal level meter"></canvas>
+
+            <div class="recording-controls-row">
+              <button type="button" class="btn btn-primary" id="startRecordBtn">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>
+                Start Recording
+              </button>
+              <button type="button" class="btn btn-secondary" id="stopRecordBtn" disabled>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect width="14" height="14" x="5" y="5" rx="2"/></svg>
+                Stop Recording
+              </button>
+              <button type="button" class="btn btn-secondary" id="replayRecordBtn" disabled>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+                Replay
+              </button>
+              <button type="button" class="btn btn-danger btn-sm" id="discardRecordBtn" disabled>
+                Discard
+              </button>
+            </div>
+
+            <!-- Hidden Audio for Recorded Preview -->
+            <audio id="recordedAudioPreview" style="display: none;"></audio>
+            <div id="micErrorNotice" class="toast toast-error" style="display:none; margin-top: 12px;" role="alert"></div>
+          </div>
+        </div>
+
+        <!-- Tab 2: File Upload -->
+        <div id="panelUpload" role="tabpanel" aria-labelledby="tabUploadBtn" style="display: none;">
+          <div class="dropzone" id="fileDropZone" tabindex="0" role="button" aria-label="Drop audio file here or click to select">
+            <svg class="dropzone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" x2="12" y1="3" y2="15"/>
+            </svg>
+            <p style="font-size: 1.1rem; color: var(--color-parchment); margin-bottom: 4px;">Drag and drop audio story here, or click to browse</p>
+            <p style="font-size: 0.85rem; color: var(--color-parchment-muted); margin: 0;">Supports WAV, MP3, M4A, FLAC, OGG, WebM (up to 25 MiB, &le; 5 minutes)</p>
+            <input type="file" id="audioFileInput" accept=".wav,.mp3,.m4a,.ogg,.flac,.webm,audio/*" style="display: none;">
+          </div>
+          <div id="selectedFileInfo" style="display: none; margin-bottom: var(--space-md); font-family: var(--font-mono); font-size: 0.88rem; color: var(--color-amber);"></div>
+        </div>
+
+        <!-- Common Story Metadata Form -->
+        <form id="storyIngestForm">
+          <div class="form-group">
+            <label for="storyTitleInput" class="form-label">Story Title <span style="color: var(--color-amber);">*</span></label>
+            <input type="text" id="storyTitleInput" class="form-input" placeholder="e.g. Grandma's Garden & The Summer of '68" required maxlength="160">
+          </div>
+
+          <div class="form-group">
+            <label for="storySpeakerInput" class="form-label">Speaker Label (Optional)</label>
+            <input type="text" id="storySpeakerInput" class="form-input" placeholder="e.g. Eleanor Vance (Grandmother)" maxlength="80">
+          </div>
+
+          <div class="consent-box">
+            <input type="checkbox" id="consentCheckbox" class="consent-checkbox" required>
+            <label for="consentCheckbox" class="consent-text">
+              <strong>Explicit Archival Permission:</strong> I affirmatively confirm that I have permission from the recorded speaker to preserve, transcribe, and index this story locally. I understand this recording remains entirely on this local device.
+            </label>
+          </div>
+
+          <div style="display: flex; justify-content: flex-end; gap: var(--space-md);">
+            <button type="submit" class="btn btn-primary" id="submitStoryBtn" disabled>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+              Preserve and Transcribe Story
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <!-- Screen 3: Transcription & Human Review -->
+    <section id="screenTranscript" class="screen-view" aria-labelledby="transcriptHeading">
+      <!-- Master Audio Player -->
+      <div class="master-player-card">
+        <div class="player-main-row">
+          <div class="player-title-info">
+            <h2 class="player-story-title" id="playerStoryTitle">Story Audio</h2>
+            <div class="player-timestamps" id="playerTimeDisplay">00:00 / 00:00</div>
+          </div>
+          <div class="player-controls-cluster">
+            <button type="button" class="btn btn-secondary btn-sm" id="masterPlayPauseBtn" aria-label="Play or Pause Story Audio">
+              <svg id="masterPlayIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              <span id="masterPlayText">Play</span>
+            </button>
+            <button type="button" class="btn btn-secondary btn-sm" id="playerSpeedBtn" aria-label="Toggle audio playback rate">1.0x</button>
+          </div>
+        </div>
+        <input type="range" class="player-scrub-bar" id="playerScrubBar" min="0" max="100" value="0" step="0.1" aria-label="Audio scrubber">
+        <audio id="mainAudioElement" preload="metadata"></audio>
+      </div>
+
+      <!-- Header & Review Status -->
+      <div class="transcript-section-header">
+        <div>
+          <h1 id="transcriptHeading" class="feature-title" style="font-size: 1.5rem; margin-bottom: 4px;">Transcript & Voice Grounding</h1>
+          <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+            <span class="revision-badge" id="transcriptRevBadge">Revision 0</span>
+            <span class="badge badge-neutral" id="reviewStateBadge">Awaiting Review</span>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: var(--space-sm); align-items: center; flex-wrap: wrap;">
+          <button type="button" class="btn btn-outline-amber btn-sm" id="confirmReviewBtn">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+            Confirm Transcript Reviewed
+          </button>
+          <button type="button" class="btn btn-primary btn-sm" id="proceedToExtractBtn">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 1 0 10 10H12V2z"/></svg>
+            Extract Traceable Memories
+          </button>
+        </div>
+      </div>
+
+      <!-- In-Progress Job Notice -->
+      <div id="transcribeJobBanner" class="toast toast-success" style="display:none; position: static; max-width: 100%; margin-bottom: var(--space-md);">
+        <span id="transcribeJobMsg">Transcribing speech with local whisper.cpp...</span>
+      </div>
+
+      <!-- Chronological Segments List -->
+      <div class="transcript-list" id="transcriptSegmentsList" role="feed" aria-label="Chronological transcript segments">
+        <!-- Segments populated dynamically -->
+      </div>
+    </section>
+
+    <!-- Screen 4: Extracting Memories (Real Pipeline Stepper) -->
+    <section id="screenExtracting" class="screen-view" aria-labelledby="extractHeading">
+      <div class="workflow-card" style="text-align: center;">
+        <h1 id="extractHeading" class="hero-heading" style="font-size: 1.8rem;">Extracting Traceable Memories</h1>
+        <p style="color: var(--color-parchment-muted); max-width: 520px; margin: 0 auto var(--space-xl) auto;">
+          Local Qwen2.5 is analyzing the reviewed transcript segments to discover recurring themes and core life stories.
+        </p>
+
+        <div class="stage-stepper" id="extractionStepper" role="list">
+          <div class="stepper-item" id="stepQueued" role="listitem">
+            <svg class="stepper-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 14 14"/></svg>
+            <span>Queued for offline processing</span>
+          </div>
+          <div class="stepper-item" id="stepAnalyzing" role="listitem">
+            <svg class="stepper-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+            <span>Analyzing transcript with local Qwen2.5</span>
+          </div>
+          <div class="stepper-item" id="stepValidating" role="listitem">
+            <svg class="stepper-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/></svg>
+            <span>Validating source citations & segment grounding</span>
+          </div>
+          <div class="stepper-item" id="stepSaving" role="listitem">
+            <svg class="stepper-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/></svg>
+            <span>Saving verified memory cards</span>
+          </div>
+        </div>
+
+        <!-- Failure Recovery Box -->
+        <div id="extractionErrorBox" class="toast toast-error" style="display: none; position: static; max-width: 540px; margin: 0 auto var(--space-lg) auto;">
+          <div>
+            <strong id="extractErrCode">EXTRACTION_ERROR</strong>
+            <p id="extractErrMsg" style="margin: 4px 0 0 0; font-size: 0.85rem;"></p>
+          </div>
+        </div>
+
+        <div style="display: flex; justify-content: center; gap: var(--space-md); margin-top: var(--space-lg);">
+          <button type="button" class="btn btn-secondary" id="cancelExtractionBtn">Return to Transcript</button>
+          <button type="button" class="btn btn-primary" id="retryExtractionBtn" style="display: none;">Retry Extraction</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Screen 5: Story Archive Library -->
+    <section id="screenArchive" class="screen-view" aria-labelledby="archiveHeading">
+      <div class="archive-toolbar">
+        <div>
+          <h1 id="archiveHeading" class="feature-title" style="font-size: 1.6rem; margin-bottom: 2px;">Preserved Stories Archive</h1>
+          <p style="color: var(--color-parchment-muted); font-size: 0.9rem; margin: 0;" id="storiesCountLabel">Loading saved records...</p>
+        </div>
+        <div class="search-input-wrapper">
+          <input type="search" id="archiveSearchInput" class="form-input" placeholder="Search by title or speaker..." aria-label="Search stories">
+        </div>
+      </div>
+
+      <!-- Empty State -->
+      <div id="archiveEmptyState" class="empty-state" style="display: none;">
+        <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="17 8 12 3 7 8"/>
+          <line x1="12" x2="12" y1="3" y2="15"/>
+        </svg>
+        <h2 class="empty-title">Your Archive is Waiting</h2>
+        <p class="empty-desc">No spoken stories have been recorded yet. Begin by preserving a loved one's voice, family history, or personal recollection.</p>
+        <button type="button" class="btn btn-primary" id="emptyRecordBtn">Record Your First Story</button>
+      </div>
+
+      <!-- Story Grid -->
+      <div class="stories-grid" id="storiesGrid" role="list" aria-label="Preserved stories">
+        <!-- Story cards populated dynamically -->
+      </div>
+    </section>
+
+    <!-- Screen 6: Traceable Memory Detail (The Core Experience) -->
+    <section id="screenMemories" class="screen-view" aria-labelledby="memoriesHeading">
+      <div class="transcript-section-header">
+        <div>
+          <button type="button" class="btn btn-secondary btn-sm" id="backToTranscriptBtn" style="margin-bottom: var(--space-xs);">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>
+            Back to Transcript
+          </button>
+          <h1 id="memoriesHeading" class="feature-title" style="font-size: 1.6rem; margin-bottom: 2px;">Traceable Memory Cards</h1>
+          <p style="color: var(--color-parchment-muted); font-size: 0.9rem; margin: 0;" id="memoriesStoryMeta"></p>
+        </div>
+        <div>
+          <button type="button" class="btn btn-outline-amber btn-sm" id="regenerateMemoriesBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+            Regenerate Memories
+          </button>
+        </div>
+      </div>
+
+      <!-- Stale Memory Warning Banner -->
+      <div id="staleCardsBanner" class="stale-warning-banner" style="display: none;" role="alert">
+        <div class="stale-warning-text">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" x2="12" y1="9" y2="13"/><line x1="12" x2="12.01" y1="17" y2="17"/></svg>
+          <span><strong>Revision Notice:</strong> Transcript was edited after memory generation. Some memory citations may reflect previous wording.</span>
+        </div>
+        <button type="button" class="btn btn-danger btn-sm" id="bannerRegenerateBtn">Regenerate Now</button>
+      </div>
+
+      <!-- Cards Container -->
+      <div class="memory-cards-container" id="memoryCardsList" role="feed" aria-label="Extracted memory cards">
+        <!-- Memory cards populated dynamically -->
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Live Announcer for Screen Readers -->
+  <div id="srAnnouncer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+
+  <!-- Notification Container -->
+  <div id="toastContainer" class="toast-container" aria-live="assertive"></div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

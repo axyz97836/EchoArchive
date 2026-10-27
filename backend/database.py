@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS stories (
     audio_duration_ms INTEGER,
     transcript_revision INTEGER NOT NULL DEFAULT 0
         CHECK(transcript_revision >= 0),
+    transcript_reviewed_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -116,6 +117,18 @@ def init_db(db_path: Optional[Path] = None) -> None:
             )
         conn.execute(
             "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (2, ?);",
+            (now_utc,)
+        )
+
+        # Migration version 3: ensure transcript_reviewed_at exists on stories
+        cursor = conn.execute("PRAGMA table_info(stories);")
+        story_cols = [row[1] for row in cursor.fetchall()]
+        if "transcript_reviewed_at" not in story_cols:
+            conn.execute(
+                "ALTER TABLE stories ADD COLUMN transcript_reviewed_at TEXT;"
+            )
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (3, ?);",
             (now_utc,)
         )
         conn.commit()
