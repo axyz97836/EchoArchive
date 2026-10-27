@@ -4,9 +4,12 @@ import os
 import re
 import shutil
 import subprocess
+import uuid
 import wave
 from pathlib import Path
 from typing import Dict, Optional, Tuple
+
+from fastapi import UploadFile
 
 from backend.config import (
     ALLOWED_AUDIO_EXTENSIONS,
@@ -14,6 +17,7 @@ from backend.config import (
     MAX_AUDIO_DURATION_SECONDS,
     MAX_AUDIO_SIZE_BYTES,
     MEDIA_DIR,
+    TMP_DIR,
 )
 
 
@@ -54,6 +58,8 @@ def validate_extension(filename: str) -> str:
 
 def sanitize_filename(filename: str) -> str:
     """Check for path traversal attempts and return base filename."""
+    if not filename or not filename.strip():
+        raise MediaValidationError("UNSUPPORTED_AUDIO", "Filename is required.")
     if ".." in filename or "/" in filename or "\\" in filename:
         raise MediaValidationError("PATH_TRAVERSAL", "Path traversal in filename is prohibited.")
     return Path(filename).name
@@ -188,3 +194,69 @@ def normalize_to_whisper_wav(input_path: Path, output_wav_path: Path) -> None:
         raise MediaValidationError("UNSUPPORTED_AUDIO", "Audio normalization timed out.")
     except Exception as e:
         raise MediaValidationError("UNSUPPORTED_AUDIO", f"Audio normalization failed: {str(e)}")
+
+
+AUDIO_MEDIA_TYPES = {
+    ".wav": "audio/wav",
+    ".mp3": "audio/mpeg",
+    ".m4a": "audio/mp4",
+    ".webm": "audio/webm",
+    ".ogg": "audio/ogg",
+    ".flac": "audio/flac",
+}
+
+
+async def stream_and_validate_upload(
+    upload_file: UploadFile,
+    max_bytes: int = MAX_AUDIO_SIZE_BYTES,
+) -> Tuple[Path, int, float, str, str]:
+    """
+    Stream and validate an uploaded audio file.
+    Enforces:
+    - Non-empty, sanitized filename with supported extension.
+    - Bounded streaming read: rejects inputs exceeding max_bytes while reading.
+    - Non-empty file content.
+    - Decodable media contents and duration <= MAX_AUDIO_DURATION_SECONDS.
+
+    Returns:
+    (temp_file_path, size_bytes, duration_seconds, extension, media_type)
+    """
+    original_filename = upload_file.filename or ""
+    sanitized_name = sanitize_filename(original_filename)
+    extension = validate_extension(sanitized_name)
+
+    TMP_DIR.mkdir(parents=True, exist_ok=True)
+    temp_file_path = TMP_DIR / f"upload_{uuid.uuid4().hex}{extension}"
+
+    total_bytes = 0
+    chunk_size = 64 * 1024  # 64 KiB chunks
+
+    try:
+        with open(temp_file_path, "wb") as f_out:
+            while True:
+                chunk = await upload_file.read(chunk_size)
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                if total_bytes > max_bytes:
+                    raise MediaValidationError(
+                        "AUDIO_TOO_LARGE",
+                        f"Audio file size exceeds maximum limit of {max_bytes / (1024 * 1024):.0f} MiB."
+                    )
+                f_out.write(chunk)
+
+        if total_bytes == 0:
+            raise MediaValidationError("UNSUPPORTED_AUDIO", "Audio file is empty.")
+
+        # Full media inspection and duration validation
+        size_bytes, duration_seconds = validate_audio(temp_file_path)
+        media_type = AUDIO_MEDIA_TYPES.get(extension, "application/octet-stream")
+        return temp_file_path, size_bytes, duration_seconds, extension, media_type
+
+    except Exception:
+        if temp_file_path.exists():
+            try:
+                temp_file_path.unlink()
+            except OSError:
+                pass
+        raise

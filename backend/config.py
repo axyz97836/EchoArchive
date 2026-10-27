@@ -16,6 +16,10 @@ MAX_AUDIO_SIZE_BYTES = 25 * 1024 * 1024  # 25 MiB
 MAX_AUDIO_DURATION_SECONDS = 300.0        # 5 minutes (300 seconds)
 ALLOWED_AUDIO_EXTENSIONS = {".wav", ".mp3", ".m4a", ".webm", ".ogg", ".flac"}
 
+# Concurrency and security limits
+MAX_QUEUED_JOBS = 5
+ALLOWED_ORIGIN_HOSTS = {"127.0.0.1", "localhost", "testserver"}
+
 # Storage directories
 DATA_DIR = Path(os.getenv("ECHOARCHIVE_DATA_DIR", PROJECT_ROOT / "data"))
 MEDIA_DIR = DATA_DIR / "media"

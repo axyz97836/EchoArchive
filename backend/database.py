@@ -2,6 +2,7 @@
 
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Generator, Optional
 
@@ -9,6 +10,11 @@ from backend.config import DATABASE_PATH, DATA_DIR
 
 SCHEMA_DDL = """
 PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER PRIMARY KEY,
+    applied_at TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS stories (
     id TEXT PRIMARY KEY,
@@ -74,21 +80,31 @@ CREATE INDEX IF NOT EXISTS ix_cards_story
     ON memory_cards(story_id);
 CREATE INDEX IF NOT EXISTS ix_jobs_story
     ON jobs(story_id, created_at);
+CREATE INDEX IF NOT EXISTS ix_stories_created
+    ON stories(created_at DESC);
 """
 
 
 def init_db(db_path: Optional[Path] = None) -> None:
-    """Initialize database schema with foreign keys enabled."""
+    """Initialize database schema with foreign keys enabled and track migrations."""
     target_path = db_path or DATABASE_PATH
     if target_path != Path(":memory:"):
         target_path.parent.mkdir(parents=True, exist_ok=True)
 
-    conn = sqlite3.connect(str(target_path))
+    conn = sqlite3.connect(str(target_path), timeout=30.0)
     try:
         conn.execute("PRAGMA foreign_keys = ON;")
         if str(target_path) != ":memory:":
             conn.execute("PRAGMA journal_mode = WAL;")
+            conn.execute("PRAGMA busy_timeout = 30000;")
         conn.executescript(SCHEMA_DDL)
+
+        # Record migration version 1
+        now_utc = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (1, ?);",
+            (now_utc,)
+        )
         conn.commit()
     finally:
         conn.close()
@@ -98,9 +114,11 @@ def init_db(db_path: Optional[Path] = None) -> None:
 def get_db(db_path: Optional[Path] = None) -> Generator[sqlite3.Connection, None, None]:
     """Provide a transactional database connection with foreign keys enabled."""
     target_path = db_path or DATABASE_PATH
-    conn = sqlite3.connect(str(target_path))
+    conn = sqlite3.connect(str(target_path), timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
+    if str(target_path) != ":memory:":
+        conn.execute("PRAGMA busy_timeout = 30000;")
     try:
         yield conn
         conn.commit()
@@ -109,3 +127,4 @@ def get_db(db_path: Optional[Path] = None) -> Generator[sqlite3.Connection, None
         raise
     finally:
         conn.close()
+

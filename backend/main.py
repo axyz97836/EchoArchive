@@ -1,15 +1,28 @@
 """FastAPI application for EchoArchive local-first backend."""
 
+import logging
+import shutil
 import sqlite3
-from contextlib import asynccontextmanager
-from typing import Any, Dict
+import urllib.parse
+import uuid
 
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+logger = logging.getLogger("echoarchive.api")
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse, Response
+from pydantic import BaseModel, Field
 
 from backend.config import (
+    ALLOWED_ORIGIN_HOSTS,
+    DATA_DIR,
     FFMPEG_BIN_PATH,
     HOST,
+    MEDIA_DIR,
     OLLAMA_BASE_URL,
     PORT,
     QWEN_MODEL_NAME,
@@ -19,16 +32,35 @@ from backend.config import (
 )
 from backend.database import get_db, init_db
 from backend.extraction import check_ollama_available, check_qwen_model_available
-from backend.media import check_ffmpeg_available
-from backend.transcription import check_whisper_available, check_whisper_model_available
+from backend.jobs import (
+    JobActiveError,
+    JobError,
+    JobQueueFullError,
+    StoryNotFoundError,
+    global_worker,
+    recover_interrupted_jobs,
+)
+from backend.media import (
+    MediaValidationError,
+    check_ffmpeg_available,
+    stream_and_validate_upload,
+)
+from backend.transcription import (
+    TranscriptionError,
+    check_whisper_available,
+    check_whisper_model_available,
+)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Lifecycle manager ensuring directory and database readiness."""
+    """Lifecycle manager ensuring directory readiness, migrations, worker startup and recovery."""
     ensure_storage_directories()
     init_db()
+    recover_interrupted_jobs()
+    global_worker.start()
     yield
+    global_worker.stop()
 
 
 app = FastAPI(
@@ -41,15 +73,132 @@ app = FastAPI(
 )
 
 
+# Security middleware: enforce localhost Origin/Host boundary on state-changing requests
+@app.middleware("http")
+async def security_origin_middleware(request: Request, call_next):
+    """Enforce loopback Host and Origin validation for state-changing requests."""
+    if request.method in ("POST", "PATCH", "DELETE", "PUT"):
+        # Validate Host header
+        raw_host = request.headers.get("host", "").split(":")[0].lower()
+        if raw_host and raw_host not in ALLOWED_ORIGIN_HOSTS:
+            return JSONResponse(
+                status_code=403,
+                content={"error": {"code": "FORBIDDEN", "message": "Untrusted Host header."}},
+            )
+
+        # Validate Origin header if present
+        origin = request.headers.get("origin")
+        if origin:
+            parsed = urllib.parse.urlparse(origin)
+            origin_host = (parsed.hostname or "").lower()
+            if origin_host not in ALLOWED_ORIGIN_HOSTS:
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "error": {
+                            "code": "FORBIDDEN",
+                            "message": "Cross-origin state-changing requests from untrusted origins are prohibited.",
+                        }
+                    },
+                )
+
+    return await call_next(request)
+
+
+# Standardized error handlers
+@app.exception_handler(MediaValidationError)
+async def media_validation_exception_handler(request: Request, exc: MediaValidationError):
+    """Map media validation errors to appropriate HTTP status codes."""
+    status_code = 422
+    if exc.code == "AUDIO_TOO_LARGE":
+        status_code = 413
+    elif exc.code == "UNSUPPORTED_AUDIO":
+        status_code = 415
+    elif exc.code == "AUDIO_TOO_LONG" or exc.code == "CONSENT_REQUIRED":
+        status_code = 422
+    elif exc.code == "FFMPEG_UNAVAILABLE":
+        status_code = 503
+
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": {"code": exc.code, "message": exc.message}},
+    )
+
+
+@app.exception_handler(JobActiveError)
+async def job_active_exception_handler(request: Request, exc: JobActiveError):
+    return JSONResponse(
+        status_code=409,
+        content={"error": {"code": exc.code, "message": exc.message}},
+    )
+
+
+@app.exception_handler(JobQueueFullError)
+async def job_queue_full_exception_handler(request: Request, exc: JobQueueFullError):
+    return JSONResponse(
+        status_code=429,
+        content={"error": {"code": exc.code, "message": exc.message}},
+    )
+
+
+@app.exception_handler(StoryNotFoundError)
+async def story_not_found_exception_handler(request: Request, exc: StoryNotFoundError):
+    return JSONResponse(
+        status_code=404,
+        content={"error": {"code": exc.code, "message": exc.message}},
+    )
+
+
+@app.exception_handler(TranscriptionError)
+async def transcription_exception_handler(request: Request, exc: TranscriptionError):
+    status_code = 502
+    if exc.code == "TRANSCRIBER_UNAVAILABLE":
+        status_code = 503
+    elif exc.code == "TRANSCRIBER_TIMEOUT":
+        status_code = 504
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": {"code": exc.code, "message": exc.message}},
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Sanitize FastAPI / Pydantic validation errors into standard format."""
+    return JSONResponse(
+        status_code=422,
+        content={"error": {"code": "INVALID_REQUEST", "message": "The request contains invalid or malformed data."}},
+    )
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Normalize HTTPException into standard error shape."""
+    code = "HTTP_ERROR"
+    if exc.status_code == 404:
+        code = "NOT_FOUND"
+    elif exc.status_code == 409:
+        code = "CONFLICT"
+    elif exc.status_code == 403:
+        code = "FORBIDDEN"
+
+    msg = exc.detail if isinstance(exc.detail, str) else "A request error occurred."
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": {"code": code, "message": msg}},
+    )
+
+
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Request, exc: Exception):
-    """Sanitized global exception handler to prevent leaking paths or traces."""
+    """Sanitized global exception handler preventing leaking paths or traces."""
     return JSONResponse(
         status_code=500,
         content={"error": {"code": "INTERNAL_ERROR", "message": "An internal error occurred."}},
     )
 
 
+# Health check endpoint
 @app.get("/api/health")
 async def health_check() -> Dict[str, Any]:
     """Report genuine readiness of all local dependencies."""
@@ -59,7 +208,6 @@ async def health_check() -> Dict[str, Any]:
     ollama_ready = check_ollama_available()
     qwen_ready = check_qwen_model_available() if ollama_ready else False
 
-    # Check database connectivity
     db_ready = False
     try:
         with get_db() as conn:
@@ -105,3 +253,459 @@ async def health_check() -> Dict[str, Any]:
             },
         },
     }
+
+
+# Audio Ingestion & Story Creation Endpoint
+@app.post("/api/stories", status_code=201)
+async def create_story(
+    audio: UploadFile = File(...),
+    title: str = Form(...),
+    speaker_label: Optional[str] = Form(None),
+    permission_confirmed: Optional[str] = Form(None),
+) -> Dict[str, Any]:
+    """
+    Ingest a new spoken story recording with explicit permission acknowledgment.
+    Enforces size (25 MiB), duration (5 minutes), media decode, and server-generated private storage.
+    """
+    # 1. Verify consent assertion
+    if not permission_confirmed or permission_confirmed.strip().lower() not in ("true", "1", "yes"):
+        raise MediaValidationError(
+            "CONSENT_REQUIRED",
+            "Affirmative confirmation of recording or upload permission is required."
+        )
+
+    # 2. Validate story title
+    trimmed_title = title.strip() if title else ""
+    if not trimmed_title or len(trimmed_title) > 160:
+        return JSONResponse(
+            status_code=422,
+            content={"error": {"code": "INVALID_TITLE", "message": "Story title must be between 1 and 160 characters."}},
+        )
+
+    # 3. Stream and validate audio upload
+    temp_path, size_bytes, duration_seconds, extension, media_type = await stream_and_validate_upload(audio)
+
+    # 4. Generate story UUID and permanent storage path
+    story_id = str(uuid.uuid4())
+    MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+    permanent_audio_path = MEDIA_DIR / f"{story_id}{extension}"
+    audio_relpath = f"media/{story_id}{extension}"
+
+    try:
+        shutil.move(str(temp_path), str(permanent_audio_path))
+    except Exception as e:
+        if temp_path.exists():
+            temp_path.unlink(missing_ok=True)
+        return JSONResponse(
+            status_code=500,
+            content={"error": {"code": "STORAGE_ERROR", "message": "Failed to store media file."}},
+        )
+
+    # 5. Persist story metadata in SQLite
+    now_utc = datetime.now(timezone.utc).isoformat()
+    duration_ms = int(duration_seconds * 1000)
+    cleaned_speaker = speaker_label.strip() if speaker_label else None
+
+    try:
+        with get_db() as conn:
+            conn.execute(
+                """
+                INSERT INTO stories (
+                    id, title, speaker_label, consent_confirmed_at, audio_relpath,
+                    audio_media_type, audio_size_bytes, audio_duration_ms,
+                    transcript_revision, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?);
+                """,
+                (
+                    story_id,
+                    trimmed_title,
+                    cleaned_speaker,
+                    now_utc,
+                    audio_relpath,
+                    media_type,
+                    size_bytes,
+                    duration_ms,
+                    now_utc,
+                    now_utc,
+                ),
+            )
+    except Exception as e:
+        logger.exception("Failed to insert story into database: %s", e)
+        # Reconcile on database failure by deleting stored media file
+        if permanent_audio_path.exists():
+            permanent_audio_path.unlink(missing_ok=True)
+        return JSONResponse(
+            status_code=500,
+            content={"error": {"code": "DATABASE_ERROR", "message": "Failed to save story metadata."}},
+        )
+
+    return {
+        "id": story_id,
+        "title": trimmed_title,
+        "speaker_label": cleaned_speaker,
+        "audio_size_bytes": size_bytes,
+        "audio_duration_ms": duration_ms,
+        "transcript_revision": 0,
+        "created_at": now_utc,
+    }
+
+
+# Story Listing & Search Endpoint
+@app.get("/api/stories")
+async def list_stories(
+    q: Optional[str] = Query(None, max_length=100),
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+) -> Dict[str, Any]:
+    """Retrieve preserved stories with optional query filtering and pagination."""
+    with get_db() as conn:
+        if q and q.strip():
+            query_term = f"%{q.strip()}%"
+            count_row = conn.execute(
+                "SELECT COUNT(*) as total FROM stories WHERE title LIKE ? OR speaker_label LIKE ?;",
+                (query_term, query_term),
+            ).fetchone()
+            total = count_row["total"] if count_row else 0
+
+            rows = conn.execute(
+                """
+                SELECT id, title, speaker_label, consent_confirmed_at, audio_relpath,
+                       audio_media_type, audio_size_bytes, audio_duration_ms,
+                       transcript_revision, created_at, updated_at
+                FROM stories
+                WHERE title LIKE ? OR speaker_label LIKE ?
+                ORDER BY created_at DESC
+                LIMIT ? OFFSET ?;
+                """,
+                (query_term, query_term, limit, offset),
+            ).fetchall()
+        else:
+            count_row = conn.execute("SELECT COUNT(*) as total FROM stories;").fetchone()
+            total = count_row["total"] if count_row else 0
+
+            rows = conn.execute(
+                """
+                SELECT id, title, speaker_label, consent_confirmed_at, audio_relpath,
+                       audio_media_type, audio_size_bytes, audio_duration_ms,
+                       transcript_revision, created_at, updated_at
+                FROM stories
+                ORDER BY created_at DESC
+                LIMIT ? OFFSET ?;
+                """,
+                (limit, offset),
+            ).fetchall()
+
+        story_list = []
+        for row in rows:
+            story_dict = dict(row)
+            # Fetch most recent job if one exists
+            job_row = conn.execute(
+                """
+                SELECT id, kind, status, stage, error_code, error_message
+                FROM jobs WHERE story_id = ? ORDER BY created_at DESC LIMIT 1;
+                """,
+                (story_dict["id"],)
+            ).fetchone()
+            story_dict["current_job"] = dict(job_row) if job_row else None
+            story_list.append(story_dict)
+
+        return {"stories": story_list, "total": total}
+
+
+# Story Details Endpoint
+@app.get("/api/stories/{id}")
+async def get_story(id: str) -> Dict[str, Any]:
+    """Retrieve metadata, revision, and job status for a single story."""
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM stories WHERE id = ?;", (id,)).fetchone()
+        if not row:
+            return JSONResponse(
+                status_code=404,
+                content={"error": {"code": "STORY_NOT_FOUND", "message": f"Story '{id}' was not found."}},
+            )
+
+        story_dict = dict(row)
+        job_row = conn.execute(
+            """
+            SELECT id, kind, status, stage, error_code, error_message, created_at, started_at, finished_at
+            FROM jobs WHERE story_id = ? ORDER BY created_at DESC LIMIT 1;
+            """,
+            (id,)
+        ).fetchone()
+        story_dict["current_job"] = dict(job_row) if job_row else None
+        return story_dict
+
+
+# Audio Streaming / Seekable Playback Endpoint
+def _parse_range_header(range_header: str, file_size: int) -> Optional[Tuple[int, int]]:
+    """Parse HTTP Range header: 'bytes=start-end'."""
+    if not range_header or not range_header.startswith("bytes="):
+        return None
+    range_val = range_header.replace("bytes=", "").strip()
+    parts = range_val.split("-")
+    if len(parts) != 2:
+        return None
+    start_str, end_str = parts
+    try:
+        if start_str and end_str:
+            start = int(start_str)
+            end = int(end_str)
+        elif start_str:
+            start = int(start_str)
+            end = file_size - 1
+        elif end_str:
+            start = max(0, file_size - int(end_str))
+            end = file_size - 1
+        else:
+            return None
+    except ValueError:
+        return None
+
+    if start < 0 or start >= file_size or end < start:
+        return None
+    end = min(end, file_size - 1)
+    return start, end
+
+
+@app.get("/api/stories/{id}/audio")
+async def get_story_audio(id: str, request: Request):
+    """
+    Serve seekable original recording using bounded HTTP range requests.
+    Prevents path traversal and verifies local file presence.
+    """
+    with get_db() as conn:
+        story = conn.execute("SELECT audio_relpath, audio_media_type FROM stories WHERE id = ?;", (id,)).fetchone()
+        if not story:
+            return JSONResponse(
+                status_code=404,
+                content={"error": {"code": "STORY_NOT_FOUND", "message": f"Story '{id}' not found."}},
+            )
+
+    audio_path = (DATA_DIR / story["audio_relpath"]).resolve()
+    # Path traversal and boundary verification
+    try:
+        audio_path.relative_to(MEDIA_DIR.resolve())
+    except ValueError:
+        return JSONResponse(
+            status_code=403,
+            content={"error": {"code": "FORBIDDEN", "message": "Access to path outside media directory is denied."}},
+        )
+
+    if not audio_path.exists() or not audio_path.is_file():
+        return JSONResponse(
+            status_code=404,
+            content={"error": {"code": "AUDIO_NOT_FOUND", "message": "Original recording audio file not found on disk."}},
+        )
+
+    file_size = audio_path.stat().st_size
+    media_type = story["audio_media_type"] or "audio/wav"
+    range_header = request.headers.get("range")
+
+    if range_header:
+        parsed_range = _parse_range_header(range_header, file_size)
+        if parsed_range is None:
+            return Response(
+                status_code=416,
+                headers={"Content-Range": f"bytes */{file_size}"},
+            )
+
+        start, end = parsed_range
+        chunk_len = end - start + 1
+        with open(audio_path, "rb") as f:
+            f.seek(start)
+            content = f.read(chunk_len)
+
+        return Response(
+            content=content,
+            status_code=206,
+            headers={
+                "Content-Range": f"bytes {start}-{end}/{file_size}",
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(chunk_len),
+                "Content-Type": media_type,
+            },
+        )
+
+    return FileResponse(
+        path=audio_path,
+        media_type=media_type,
+        headers={"Accept-Ranges": "bytes"},
+    )
+
+
+# Transcription Initiation Endpoint
+@app.post("/api/stories/{id}/transcribe", status_code=202)
+async def start_transcription(id: str) -> Dict[str, Any]:
+    """Start or retry offline speech recognition for a preserved story."""
+    job_info = global_worker.enqueue_transcription(id)
+    return job_info
+
+
+# Job Polling Endpoint
+@app.get("/api/jobs/{job_id}")
+async def get_job_status(job_id: str) -> Dict[str, Any]:
+    """Retrieve current state and stage transitions for an inference job."""
+    with get_db() as conn:
+        job = conn.execute("SELECT * FROM jobs WHERE id = ?;", (job_id,)).fetchone()
+        if not job:
+            return JSONResponse(
+                status_code=404,
+                content={"error": {"code": "JOB_NOT_FOUND", "message": f"Job '{job_id}' not found."}},
+            )
+
+        return {
+            "id": job["id"],
+            "job_id": job["id"],
+            "story_id": job["story_id"],
+            "kind": job["kind"],
+            "status": job["status"],
+            "stage": job["stage"],
+            "error_code": job["error_code"],
+            "error_message": job["error_message"],
+            "created_at": job["created_at"],
+            "started_at": job["started_at"],
+            "finished_at": job["finished_at"],
+        }
+
+
+# Transcript Segments Retrieval Endpoint
+@app.get("/api/stories/{id}/segments")
+async def get_story_segments(id: str) -> Dict[str, Any]:
+    """Retrieve chronological, timestamped transcript segments for a story."""
+    with get_db() as conn:
+        story = conn.execute("SELECT id, transcript_revision FROM stories WHERE id = ?;", (id,)).fetchone()
+        if not story:
+            return JSONResponse(
+                status_code=404,
+                content={"error": {"code": "STORY_NOT_FOUND", "message": f"Story '{id}' not found."}},
+            )
+
+        cursor = conn.execute(
+            """
+            SELECT id, segment_index, start_ms, end_ms, text, user_edited
+            FROM transcript_segments
+            WHERE story_id = ?
+            ORDER BY segment_index ASC;
+            """,
+            (id,)
+        )
+        segments = [dict(row) for row in cursor.fetchall()]
+
+        return {
+            "story_id": id,
+            "transcript_revision": story["transcript_revision"],
+            "segments": segments,
+        }
+
+
+# Transcript Correction Endpoint (PATCH)
+class TranscriptCorrectionRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=2000)
+    expected_revision: int = Field(..., ge=1)
+
+
+@app.patch("/api/stories/{id}/segments/{segment_id}")
+async def update_transcript_segment(
+    id: str,
+    segment_id: str,
+    payload: TranscriptCorrectionRequest,
+) -> Dict[str, Any]:
+    """
+    Update a transcript segment with human review corrections.
+    Uses optimistic concurrency with expected_revision to prevent conflicting overwrites.
+    """
+    trimmed_text = payload.text.strip()
+    if not trimmed_text:
+        return JSONResponse(
+            status_code=422,
+            content={"error": {"code": "INVALID_CORRECTION", "message": "Corrected segment text cannot be empty."}},
+        )
+
+    with get_db() as conn:
+        # 1. Verify story exists
+        story = conn.execute("SELECT id, transcript_revision FROM stories WHERE id = ?;", (id,)).fetchone()
+        if not story:
+            return JSONResponse(
+                status_code=404,
+                content={"error": {"code": "STORY_NOT_FOUND", "message": f"Story '{id}' not found."}},
+            )
+
+        # 2. Verify segment exists and belongs to this story
+        segment = conn.execute(
+            "SELECT * FROM transcript_segments WHERE id = ?;",
+            (segment_id,)
+        ).fetchone()
+        if not segment:
+            return JSONResponse(
+                status_code=404,
+                content={"error": {"code": "SEGMENT_NOT_FOUND", "message": f"Segment '{segment_id}' not found."}},
+            )
+
+        if segment["story_id"] != id:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "error": {
+                        "code": "SEGMENT_NOT_FOUND",
+                        "message": f"Segment '{segment_id}' does not belong to story '{id}'.",
+                    }
+                },
+            )
+
+        # 3. Optimistic concurrency check
+        current_revision = story["transcript_revision"]
+        if payload.expected_revision != current_revision:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error": {
+                        "code": "REVISION_CONFLICT",
+                        "message": f"Transcript revision mismatch. Expected {payload.expected_revision}, but current revision is {current_revision}.",
+                    }
+                },
+            )
+
+        # 4. Atomically update story revision with compare-and-swap condition
+        now_utc = datetime.now(timezone.utc).isoformat()
+        new_revision = current_revision + 1
+
+        update_cursor = conn.execute(
+            """
+            UPDATE stories
+            SET transcript_revision = ?, updated_at = ?
+            WHERE id = ? AND transcript_revision = ?;
+            """,
+            (new_revision, now_utc, id, payload.expected_revision),
+        )
+        if update_cursor.rowcount == 0:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error": {
+                        "code": "REVISION_CONFLICT",
+                        "message": f"Transcript revision conflict for story '{id}'. Expected revision was modified by a concurrent update.",
+                    }
+                },
+            )
+
+        conn.execute(
+            """
+            UPDATE transcript_segments
+            SET text = ?, user_edited = 1
+            WHERE id = ?;
+            """,
+            (trimmed_text, segment_id),
+        )
+
+        return {
+            "segment": {
+                "id": segment_id,
+                "story_id": id,
+                "segment_index": segment["segment_index"],
+                "start_ms": segment["start_ms"],
+                "end_ms": segment["end_ms"],
+                "text": trimmed_text,
+                "user_edited": 1,
+            },
+            "transcript_revision": new_revision,
+        }
