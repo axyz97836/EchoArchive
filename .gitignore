@@ -14,6 +14,13 @@ data/
 *.sqlite3
 *.sqlite3-wal
 *.sqlite3-shm
+*.wav
+*.mp3
+*.m4a
+*.ogg
+*.flac
+*.aiff
+*.webm
 
 # Machine learning model weights and binaries
 models/

@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EchoArchive — Phase C Traceable Memories Demonstration Harness</title>
+  <style>
+    :root {
+      --bg-dark: #1b252b;
+      --card-bg: #27333a;
+      --surface-raised: #303e43;
+      --text-main: #f5eadc;
+      --text-muted: #c9c4b7;
+      --accent-amber: #e5b65f;
+      --accent-burgundy: #d58c86;
+      --alert-warn-bg: #4a3818;
+      --alert-warn-border: #e5b65f;
+      --alert-danger-bg: #4a1f20;
+      --alert-danger-border: #d58c86;
+      --border-color: #455258;
+      --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    body {
+      margin: 0;
+      padding: 24px;
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      font-family: var(--font-family);
+      line-height: 1.5;
+    }
+
+    .container {
+      max-width: 960px;
+      margin: 0 auto;
+    }
+
+    header {
+      border-bottom: 1px solid var(--border-color);
+      padding-bottom: 16px;
+      margin-bottom: 24px;
+    }
+
+    h1 {
+      margin: 0 0 8px 0;
+      font-size: 26px;
+      color: var(--accent-amber);
+    }
+
+    .tagline {
+      color: var(--text-muted);
+      font-size: 14px;
+      margin: 0;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+
+    .badge-amber {
+      background: var(--alert-warn-bg);
+      color: var(--accent-amber);
+      border: 1px solid var(--alert-warn-border);
+    }
+
+    .badge-stale {
+      background: var(--alert-danger-bg);
+      color: var(--accent-burgundy);
+      border: 1px solid var(--alert-danger-border);
+    }
+
+    .badge-ready {
+      background: #194432;
+      color: #8bdeb9;
+      border: 1px solid #246b53;
+    }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+
+    .card-title {
+      font-size: 18px;
+      margin-top: 0;
+      margin-bottom: 8px;
+      color: var(--text-main);
+    }
+
+    .meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+    }
+
+    .audio-player-container {
+      background: var(--surface-raised);
+      padding: 16px;
+      border-radius: 6px;
+      margin-top: 12px;
+    }
+
+    audio {
+      width: 100%;
+      outline: none;
+    }
+
+    .playback-status {
+      font-size: 13px;
+      color: var(--accent-amber);
+      margin-top: 8px;
+      font-family: monospace;
+    }
+
+    .memory-card {
+      background: var(--surface-raised);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+
+    .memory-card.stale {
+      border: 1px solid var(--accent-burgundy);
+      background: #2a2829;
+    }
+
+    .source-segment {
+      background: rgba(0, 0, 0, 0.25);
+      border-left: 3px solid var(--accent-amber);
+      padding: 10px 14px;
+      margin-top: 10px;
+      border-radius: 0 4px 4px 0;
+      font-size: 14px;
+    }
+
+    .source-segment.active-playing {
+      border-left: 3px solid #8bdeb9;
+      background: rgba(36, 107, 83, 0.2);
+    }
+
+    .source-header {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+      font-family: monospace;
+    }
+
+    button {
+      background: var(--accent-amber);
+      color: #1a1a1a;
+      border: none;
+      padding: 8px 14px;
+      border-radius: 4px;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 13px;
+      transition: opacity 0.15s;
+    }
+
+    button:hover {
+      opacity: 0.9;
+    }
+
+    button.btn-secondary {
+      background: var(--surface-raised);
+      color: var(--text-main);
+      border: 1px solid var(--border-color);
+    }
+
+    button.btn-small {
+      padding: 4px 10px;
+      font-size: 12px;
+    }
+
+    input[type="text"] {
+      background: var(--surface-raised);
+      border: 1px solid var(--border-color);
+      color: var(--text-main);
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+
+    .stale-banner {
+      background: var(--alert-danger-bg);
+      border: 1px solid var(--alert-danger-border);
+      color: var(--accent-burgundy);
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-size: 13px;
+      margin-bottom: 12px;
+    }
+
+    .themes-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 8px 0;
+    }
+
+    .theme-chip {
+      background: rgba(229, 182, 95, 0.15);
+      color: var(--accent-amber);
+      border: 1px solid rgba(229, 182, 95, 0.3);
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>EchoArchive — Traceable Memories Demonstration</h1>
+      <p class="tagline">Phase C Verification Harness · Local-first source-linked audio playback</p>
+    </header>
+
+    <!-- Story Selector & Metadata -->
+    <div class="card">
+      <h2 class="card-title">1. Select or Enter Story ID</h2>
+      <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+        <input type="text" id="storyIdInput" placeholder="Enter Story UUID..." style="flex: 1;">
+        <button id="loadStoryBtn" onclick="loadStory()">Load Story</button>
+        <button class="btn-secondary" onclick="loadLatestStory()">Load Most Recent</button>
+      </div>
+
+      <div id="storyMetadata" style="display: none;">
+        <div class="meta-row">
+          <span>Title: <strong id="storyTitle">-</strong></span>
+          <span>Speaker: <strong id="storySpeaker">-</strong></span>
+          <span>Transcript Revision: <strong id="storyRevision">-</strong></span>
+          <span>Duration: <strong id="storyDuration">-</strong></span>
+        </div>
+
+        <div class="audio-player-container">
+          <label style="font-size: 12px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 6px;">
+            GENUINE ORIGINAL AUDIO RECORDING (HTTP 206 Byte-Range Seekable)
+          </label>
+          <audio id="audioPlayer" controls preload="metadata"></audio>
+          <div style="margin-top: 8px; display: flex; align-items: center; justify-content: space-between;">
+            <div class="playback-status" id="playbackStatus">Ready. Click a memory source quotation to seek and play.</div>
+            <label style="font-size: 12px; color: var(--text-muted); cursor: pointer;">
+              <input type="checkbox" id="stopAtEndCheckbox" checked> Stop at segment end
+            </label>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Traceable Memory Cards -->
+    <div class="card">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <h2 class="card-title" style="margin: 0;">2. Traceable Memory Cards</h2>
+        <div>
+          <button id="extractMemoriesBtn" onclick="triggerExtraction()" style="display: none;">Find Meaningful Moments (Local Qwen)</button>
+        </div>
+      </div>
+
+      <div id="extractionStatus" style="display: none; padding: 10px; background: var(--surface-raised); border-radius: 4px; margin-bottom: 12px; font-size: 13px;">
+        Extraction Status: <strong id="extractionStatusText">queued</strong>
+      </div>
+
+      <div id="memoryCardsList">
+        <p style="color: var(--text-muted); font-size: 14px;">Please load a story to view its memory cards.</p>
+      </div>
+    </div>
+
+    <!-- Transcript Review & Concurrency Testing -->
+    <div class="card">
+      <h2 class="card-title">3. Transcript Review & Invalidation Simulator</h2>
+      <p style="color: var(--text-muted); font-size: 13px;">
+        Edit a transcript segment below to demonstrate optimistic revision control. Modifying the transcript increments the story revision and immediately marks previously extracted cards as <strong>STALE</strong>.
+      </p>
+
+      <div id="transcriptSegmentsList">
+        <p style="color: var(--text-muted); font-size: 14px;">Segments will appear here once a story is loaded.</p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let currentStory = null;
+    let currentSegments = [];
+    let currentCards = [];
+    let activePlaybackEndSeconds = null;
+
+    const audioPlayer = document.getElementById('audioPlayer');
+    const playbackStatus = document.getElementById('playbackStatus');
+    const stopAtEndCheckbox = document.getElementById('stopAtEndCheckbox');
+
+    // Monitor audio time for segment end boundary
+    audioPlayer.addEventListener('timeupdate', () => {
+      if (activePlaybackEndSeconds !== null && stopAtEndCheckbox.checked) {
+        if (audioPlayer.currentTime >= activePlaybackEndSeconds) {
+          audioPlayer.pause();
+          playbackStatus.textContent = `Completed playback of segment moment at ${activePlaybackEndSeconds.toFixed(2)}s.`;
+          activePlaybackEndSeconds = null;
+          document.querySelectorAll('.source-segment').forEach(el => el.classList.remove('active-playing'));
+        }
+      }
+    });
+
+    async function loadLatestStory() {
+      try {
+        const resp = await fetch('/api/stories?limit=1');
+        const data = await resp.json();
+        if (data.stories && data.stories.length > 0) {
+          document.getElementById('storyIdInput').value = data.stories[0].id;
+          await loadStory();
+        } else {
+          alert('No stories preserved in EchoArchive yet.');
+        }
+      } catch (err) {
+        alert('Failed to list stories: ' + err.message);
+      }
+    }
+
+    async function loadStory() {
+      const storyId = document.getElementById('storyIdInput').value.trim();
+      if (!storyId) return;
+
+      try {
+        const resp = await fetch(`/api/stories/${storyId}`);
+        if (!resp.ok) {
+          const err = await resp.json();
+          alert(`Error: ${err.error?.message || 'Story not found'}`);
+          return;
+        }
+
+        currentStory = await resp.json();
+        renderStoryMetadata();
+        await loadTranscriptSegments();
+        await loadMemoryCards();
+      } catch (err) {
+        alert('Failed to load story: ' + err.message);
+      }
+    }
+
+    function renderStoryMetadata() {
+      document.getElementById('storyMetadata').style.display = 'block';
+      document.getElementById('extractMemoriesBtn').style.display = 'inline-block';
+      document.getElementById('storyTitle').textContent = currentStory.title;
+      document.getElementById('storySpeaker').textContent = currentStory.speaker_label || 'Unlabeled';
+      document.getElementById('storyRevision').textContent = `Rev ${currentStory.transcript_revision}`;
+      document.getElementById('storyDuration').textContent = currentStory.audio_duration_ms 
+        ? `${(currentStory.audio_duration_ms / 1000).toFixed(1)}s` 
+        : 'Unknown';
+
+      audioPlayer.src = `/api/stories/${currentStory.id}/audio`;
+      playbackStatus.textContent = 'Ready. Click any source segment to hear original recorded moment.';
+    }
+
+    async function loadTranscriptSegments() {
+      try {
+        const resp = await fetch(`/api/stories/${currentStory.id}/segments`);
+        const data = await resp.json();
+        currentSegments = data.segments || [];
+        renderTranscriptSegments();
+      } catch (err) {
+        console.error('Failed to load transcript segments', err);
+      }
+    }
+
+    function renderTranscriptSegments() {
+      const container = document.getElementById('transcriptSegmentsList');
+      if (currentSegments.length === 0) {
+        container.innerHTML = '<p style="color: var(--text-muted);">No transcript segments found.</p>';
+        return;
+      }
+
+      container.innerHTML = currentSegments.map(seg => `
+        <div style="background: var(--surface-raised); border: 1px solid var(--border-color); border-radius: 6px; padding: 12px; margin-bottom: 8px;">
+          <div style="display: flex; justify-content: space-between; font-size: 12px; color: var(--text-muted); margin-bottom: 4px; font-family: monospace;">
+            <span>${seg.id} (#${seg.segment_index}) · ${(seg.start_ms/1000).toFixed(2)}s &rarr; ${(seg.end_ms/1000).toFixed(2)}s</span>
+            <span>${seg.user_edited ? '<span class="badge badge-amber">Edited</span>' : 'Machine Transcription'}</span>
+          </div>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <input type="text" id="seg_input_${seg.id}" value="${escapeHtml(seg.text)}" style="flex: 1;">
+            <button class="btn-small" onclick="saveSegmentCorrection('${seg.id}')">Save Correction</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    async function saveSegmentCorrection(segmentId) {
+      const inputEl = document.getElementById(`seg_input_${segmentId}`);
+      const newText = inputEl.value.trim();
+      if (!newText) {
+        alert('Segment text cannot be empty.');
+        return;
+      }
+
+      try {
+        const resp = await fetch(`/api/stories/${currentStory.id}/segments/${segmentId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: newText,
+            expected_revision: currentStory.transcript_revision
+          })
+        });
+
+        if (!resp.ok) {
+          const err = await resp.json();
+          alert(`Correction failed: ${err.error?.message || 'Conflict'}`);
+          await loadStory();
+          return;
+        }
+
+        const data = await resp.json();
+        currentStory.transcript_revision = data.transcript_revision;
+        document.getElementById('storyRevision').textContent = `Rev ${currentStory.transcript_revision}`;
+        await loadTranscriptSegments();
+        await loadMemoryCards();
+      } catch (err) {
+        alert('Correction request failed: ' + err.message);
+      }
+    }
+
+    async function loadMemoryCards() {
+      const container = document.getElementById('memoryCardsList');
+      try {
+        const resp = await fetch(`/api/stories/${currentStory.id}/cards`);
+        const data = await resp.json();
+        currentCards = data.cards || [];
+
+        if (currentCards.length === 0) {
+          container.innerHTML = `
+            <p style="color: var(--text-muted); font-size: 14px;">
+              No memory cards extracted for this story yet. Click <strong>Find Meaningful Moments</strong> above to run local Qwen extraction.
+            </p>
+          `;
+          return;
+        }
+
+        container.innerHTML = currentCards.map(card => {
+          const isStale = card.is_stale;
+          const staleHtml = isStale ? `
+            <div class="stale-banner">
+              ⚠️ <strong>STALE MEMORY:</strong> ${card.stale_reason}
+            </div>
+          ` : '';
+
+          const sourcesHtml = (card.sources || []).map(source => `
+            <div class="source-segment" id="src_box_${source.segment_id}">
+              <div class="source-header">
+                <span>[${source.segment_id}] ${(source.start_seconds).toFixed(2)}s &rarr; ${(source.end_seconds).toFixed(2)}s</span>
+                <button class="btn-small" onclick="playSourceMoment('${source.segment_id}', ${source.start_seconds}, ${source.end_seconds})">
+                  ▶ Play Original Moment
+                </button>
+              </div>
+              <div>"${escapeHtml(source.text)}"</div>
+            </div>
+          `).join('');
+
+          const themesHtml = (card.themes || []).map(t => `<span class="theme-chip">${escapeHtml(t)}</span>`).join('');
+
+          return `
+            <div class="memory-card ${isStale ? 'stale' : ''}">
+              ${staleHtml}
+              <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                <h3 style="margin: 0 0 4px 0; font-size: 17px; color: var(--text-main);">${escapeHtml(card.title)}</h3>
+                <span class="badge ${card.review_state === 'accepted' ? 'badge-ready' : 'badge-amber'}">${card.review_state}</span>
+              </div>
+              <p style="margin: 8px 0; font-size: 14px; color: var(--text-main);">${escapeHtml(card.summary)}</p>
+              
+              <div class="themes-chips">${themesHtml}</div>
+
+              <div class="meta-row" style="margin-top: 8px; border-top: 1px solid var(--border-color); padding-top: 8px;">
+                <span>Provenance: <code>${card.model_provenance || 'qwen2.5:1.5b'}</code></span>
+                <span>Generated from: Rev ${card.generated_from_revision}</span>
+                <span>Review: 
+                  <button class="btn-small btn-secondary" onclick="updateReviewState('${card.id}', 'accepted')">Approve</button>
+                  <button class="btn-small btn-secondary" onclick="updateReviewState('${card.id}', 'dismissed')">Dismiss</button>
+                </span>
+              </div>
+
+              <div style="margin-top: 10px;">
+                <div style="font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase;">
+                  Verifiable Source Transcript Citations:
+                </div>
+                ${sourcesHtml}
+              </div>
+            </div>
+          `;
+        }).join('');
+      } catch (err) {
+        container.innerHTML = `<p style="color: var(--accent-burgundy);">Failed to load memory cards: ${err.message}</p>`;
+      }
+    }
+
+    function playSourceMoment(segmentId, startSec, endSec) {
+      document.querySelectorAll('.source-segment').forEach(el => el.classList.remove('active-playing'));
+      const activeEl = document.getElementById(`src_box_${segmentId}`);
+      if (activeEl) activeEl.classList.add('active-playing');
+
+      activePlaybackEndSeconds = endSec;
+      audioPlayer.currentTime = startSec;
+      audioPlayer.play();
+      playbackStatus.textContent = `Playing source moment [${segmentId}]: ${startSec.toFixed(2)}s to ${endSec.toFixed(2)}s`;
+    }
+
+    async function updateReviewState(cardId, newState) {
+      try {
+        const resp = await fetch(`/api/cards/${cardId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ review_state: newState })
+        });
+        if (!resp.ok) {
+          const err = await resp.json();
+          alert(`Update failed: ${err.error?.message || 'Error'}`);
+          return;
+        }
+        await loadMemoryCards();
+      } catch (err) {
+        alert('Review state update failed: ' + err.message);
+      }
+    }
+
+    async function triggerExtraction() {
+      if (!currentStory) return;
+
+      const statusBox = document.getElementById('extractionStatus');
+      const statusText = document.getElementById('extractionStatusText');
+      statusBox.style.display = 'block';
+      statusText.textContent = 'Enqueuing extraction...';
+
+      try {
+        const resp = await fetch(`/api/stories/${currentStory.id}/extract`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ expected_revision: currentStory.transcript_revision })
+        });
+
+        if (!resp.ok) {
+          const err = await resp.json();
+          statusText.textContent = `Error: ${err.error?.message || 'Failed'}`;
+          return;
+        }
+
+        const data = await resp.json();
+        const jobId = data.job_id;
+        pollJob(jobId);
+      } catch (err) {
+        statusText.textContent = `Request error: ${err.message}`;
+      }
+    }
+
+    async function pollJob(jobId) {
+      const statusText = document.getElementById('extractionStatusText');
+      const pollInterval = setInterval(async () => {
+        try {
+          const resp = await fetch(`/api/jobs/${jobId}`);
+          const job = await resp.json();
+
+          statusText.textContent = `Job [${job.status}]: ${job.stage}`;
+
+          if (job.status === 'succeeded') {
+            clearInterval(pollInterval);
+            statusText.textContent = 'Succeeded! Refreshing memory cards...';
+            await loadMemoryCards();
+            setTimeout(() => {
+              document.getElementById('extractionStatus').style.display = 'none';
+            }, 3000);
+          } else if (job.status === 'failed') {
+            clearInterval(pollInterval);
+            statusText.textContent = `Failed (${job.error_code}): ${job.error_message}`;
+          }
+        } catch (e) {
+          clearInterval(pollInterval);
+          statusText.textContent = 'Polling error: ' + e.message;
+        }
+      }, 1000);
+    }
+
+    function escapeHtml(text) {
+      if (!text) return '';
+      return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+  </script>
+</body>
+</html>

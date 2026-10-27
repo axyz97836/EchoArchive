@@ -1,5 +1,6 @@
 """FastAPI application for EchoArchive local-first backend."""
 
+import json
 import logging
 import shutil
 import sqlite3
@@ -15,6 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from backend.config import (
@@ -25,13 +27,19 @@ from backend.config import (
     MEDIA_DIR,
     OLLAMA_BASE_URL,
     PORT,
+    PROJECT_ROOT,
     QWEN_MODEL_NAME,
     WHISPER_CLI_PATH,
     WHISPER_MODEL_PATH,
     ensure_storage_directories,
 )
 from backend.database import get_db, init_db
-from backend.extraction import check_ollama_available, check_qwen_model_available
+from backend.evidence import EvidenceValidationError
+from backend.extraction import (
+    ExtractionError,
+    check_ollama_available,
+    check_qwen_model_available,
+)
 from backend.jobs import (
     JobActiveError,
     JobError,
@@ -149,6 +157,19 @@ async def story_not_found_exception_handler(request: Request, exc: StoryNotFound
     )
 
 
+@app.exception_handler(JobError)
+async def job_error_exception_handler(request: Request, exc: JobError):
+    status_code = 422
+    if exc.code == "REVISION_CONFLICT":
+        status_code = 409
+    elif exc.code == "NO_TRANSCRIPT":
+        status_code = 422
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": {"code": exc.code, "message": exc.message}},
+    )
+
+
 @app.exception_handler(TranscriptionError)
 async def transcription_exception_handler(request: Request, exc: TranscriptionError):
     status_code = 502
@@ -158,6 +179,29 @@ async def transcription_exception_handler(request: Request, exc: TranscriptionEr
         status_code = 504
     return JSONResponse(
         status_code=status_code,
+        content={"error": {"code": exc.code, "message": exc.message}},
+    )
+
+
+@app.exception_handler(ExtractionError)
+async def extraction_exception_handler(request: Request, exc: ExtractionError):
+    status_code = 502
+    if exc.code == "OLLAMA_UNAVAILABLE":
+        status_code = 503
+    elif exc.code == "OLLAMA_TIMEOUT":
+        status_code = 504
+    elif exc.code in ("INVALID_EVIDENCE", "UNSUPPORTED_QUOTE"):
+        status_code = 422
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": {"code": exc.code, "message": exc.message}},
+    )
+
+
+@app.exception_handler(EvidenceValidationError)
+async def evidence_validation_exception_handler(request: Request, exc: EvidenceValidationError):
+    return JSONResponse(
+        status_code=422,
         content={"error": {"code": exc.code, "message": exc.message}},
     )
 
@@ -371,7 +415,7 @@ async def list_stories(
                 """
                 SELECT id, title, speaker_label, consent_confirmed_at, audio_relpath,
                        audio_media_type, audio_size_bytes, audio_duration_ms,
-                       transcript_revision, created_at, updated_at
+                       transcript_revision, transcript_reviewed_at, created_at, updated_at
                 FROM stories
                 WHERE title LIKE ? OR speaker_label LIKE ?
                 ORDER BY created_at DESC
@@ -387,7 +431,7 @@ async def list_stories(
                 """
                 SELECT id, title, speaker_label, consent_confirmed_at, audio_relpath,
                        audio_media_type, audio_size_bytes, audio_duration_ms,
-                       transcript_revision, created_at, updated_at
+                       transcript_revision, transcript_reviewed_at, created_at, updated_at
                 FROM stories
                 ORDER BY created_at DESC
                 LIMIT ? OFFSET ?;
@@ -398,6 +442,12 @@ async def list_stories(
         story_list = []
         for row in rows:
             story_dict = dict(row)
+            story_dict["is_reviewed"] = story_dict.get("transcript_reviewed_at") is not None
+            cards_count = conn.execute("SELECT COUNT(*) FROM memory_cards WHERE story_id = ?;", (story_dict["id"],)).fetchone()[0]
+            story_dict["memory_cards_count"] = cards_count
+            seg_count = conn.execute("SELECT COUNT(*) FROM transcript_segments WHERE story_id = ?;", (story_dict["id"],)).fetchone()[0]
+            story_dict["transcript_segments_count"] = seg_count
+
             # Fetch most recent job if one exists
             job_row = conn.execute(
                 """
@@ -415,7 +465,7 @@ async def list_stories(
 # Story Details Endpoint
 @app.get("/api/stories/{id}")
 async def get_story(id: str) -> Dict[str, Any]:
-    """Retrieve metadata, revision, and job status for a single story."""
+    """Retrieve metadata, revision, review state, and job status for a single story."""
     with get_db() as conn:
         row = conn.execute("SELECT * FROM stories WHERE id = ?;", (id,)).fetchone()
         if not row:
@@ -425,6 +475,12 @@ async def get_story(id: str) -> Dict[str, Any]:
             )
 
         story_dict = dict(row)
+        story_dict["is_reviewed"] = story_dict.get("transcript_reviewed_at") is not None
+        cards_count = conn.execute("SELECT COUNT(*) FROM memory_cards WHERE story_id = ?;", (id,)).fetchone()[0]
+        story_dict["memory_cards_count"] = cards_count
+        seg_count = conn.execute("SELECT COUNT(*) FROM transcript_segments WHERE story_id = ?;", (id,)).fetchone()[0]
+        story_dict["transcript_segments_count"] = seg_count
+
         job_row = conn.execute(
             """
             SELECT id, kind, status, stage, error_code, error_message, created_at, started_at, finished_at
@@ -672,10 +728,10 @@ async def update_transcript_segment(
         update_cursor = conn.execute(
             """
             UPDATE stories
-            SET transcript_revision = ?, updated_at = ?
+            SET transcript_revision = ?, transcript_reviewed_at = ?, updated_at = ?
             WHERE id = ? AND transcript_revision = ?;
             """,
-            (new_revision, now_utc, id, payload.expected_revision),
+            (new_revision, now_utc, now_utc, id, payload.expected_revision),
         )
         if update_cursor.rowcount == 0:
             return JSONResponse(
@@ -708,4 +764,346 @@ async def update_transcript_segment(
                 "user_edited": 1,
             },
             "transcript_revision": new_revision,
+            "transcript_reviewed_at": now_utc,
         }
+
+
+# Human Review Confirmation Endpoint
+@app.post("/api/stories/{id}/review")
+async def confirm_story_review(id: str) -> Dict[str, Any]:
+    """
+    Explicitly confirm that a story's transcript has been reviewed and approved by a human.
+    Enforces that transcript segments must exist before review confirmation is accepted.
+    """
+    with get_db() as conn:
+        story = conn.execute("SELECT * FROM stories WHERE id = ?;", (id,)).fetchone()
+        if not story:
+            return JSONResponse(
+                status_code=404,
+                content={"error": {"code": "STORY_NOT_FOUND", "message": f"Story '{id}' not found."}},
+            )
+
+        seg_count = conn.execute("SELECT COUNT(*) FROM transcript_segments WHERE story_id = ?;", (id,)).fetchone()[0]
+        if seg_count == 0:
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": "NO_TRANSCRIPT", "message": "Cannot confirm review for a story without transcript segments."}},
+            )
+
+        now_utc = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "UPDATE stories SET transcript_reviewed_at = ?, updated_at = ? WHERE id = ?;",
+            (now_utc, now_utc, id),
+        )
+
+        row = conn.execute("SELECT * FROM stories WHERE id = ?;", (id,)).fetchone()
+        story_dict = dict(row)
+        story_dict["is_reviewed"] = True
+        return story_dict
+
+
+# Memory Extraction Initiation Endpoint
+class ExtractMemoriesRequest(BaseModel):
+    expected_revision: Optional[int] = Field(None, ge=1)
+
+
+@app.post("/api/stories/{id}/extract", status_code=202)
+async def start_memory_extraction(
+    id: str,
+    payload: Optional[ExtractMemoriesRequest] = None,
+) -> Dict[str, Any]:
+    """
+    Start asynchronous grounded memory extraction using local Qwen2.5.
+    Requires an eligible story with a completed transcript.
+    """
+    expected_rev = payload.expected_revision if payload else None
+    job_info = global_worker.enqueue_extraction(id, expected_revision=expected_rev)
+    return job_info
+
+
+# Memory Cards Retrieval Endpoint
+@app.get("/api/stories/{id}/cards")
+async def get_story_memory_cards(id: str) -> Dict[str, Any]:
+    """
+    Retrieve source-grounded memory cards for a story with computed stale flags
+    and verified supporting transcript segment passages and seek timestamps.
+    """
+    with get_db() as conn:
+        story = conn.execute(
+            "SELECT id, title, transcript_revision, audio_duration_ms FROM stories WHERE id = ?;",
+            (id,)
+        ).fetchone()
+        if not story:
+            return JSONResponse(
+                status_code=404,
+                content={"error": {"code": "STORY_NOT_FOUND", "message": f"Story '{id}' not found."}},
+            )
+
+        current_revision = story["transcript_revision"]
+        audio_duration_ms = story["audio_duration_ms"] or 0
+
+        # Fetch cards
+        cards_cursor = conn.execute(
+            """
+            SELECT id, story_id, title, summary, themes_json,
+                   generated_from_revision, review_state, model_provenance, created_at
+            FROM memory_cards
+            WHERE story_id = ?
+            ORDER BY created_at ASC;
+            """,
+            (id,)
+        )
+        card_rows = cards_cursor.fetchall()
+
+        cards = []
+        for crow in card_rows:
+            card_id = crow["id"]
+            gen_rev = crow["generated_from_revision"]
+            is_stale = (gen_rev != current_revision)
+            stale_reason = (
+                f"Transcript has been modified since generation (card revision {gen_rev} vs current revision {current_revision})."
+                if is_stale else None
+            )
+
+            # Fetch sources for this card
+            sources_cursor = conn.execute(
+                """
+                SELECT ts.id, ts.segment_index, ts.start_ms, ts.end_ms, ts.text, ts.user_edited
+                FROM memory_sources ms
+                JOIN transcript_segments ts ON ms.segment_id = ts.id
+                WHERE ms.card_id = ? AND ts.story_id = ?
+                ORDER BY ts.segment_index ASC;
+                """,
+                (card_id, id)
+            )
+            sources = []
+            for srow in sources_cursor.fetchall():
+                start_ms = srow["start_ms"]
+                end_ms = srow["end_ms"]
+                timing_reliable = (
+                    start_ms >= 0
+                    and end_ms > start_ms
+                    and (audio_duration_ms == 0 or end_ms <= audio_duration_ms + 1000)
+                )
+                sources.append({
+                    "segment_id": srow["id"],
+                    "segment_index": srow["segment_index"],
+                    "start_ms": start_ms,
+                    "end_ms": end_ms,
+                    "start_seconds": round(start_ms / 1000.0, 3),
+                    "end_seconds": round(end_ms / 1000.0, 3),
+                    "duration_seconds": round((end_ms - start_ms) / 1000.0, 3),
+                    "text": srow["text"],
+                    "user_edited": bool(srow["user_edited"]),
+                    "story_id": id,
+                    "audio_url": f"/api/stories/{id}/audio",
+                    "transcript_revision": current_revision,
+                    "timing_reliable": timing_reliable,
+                    "seek_fallback_message": None if timing_reliable else "Precise timestamp unavailable; please listen from the beginning of the recording.",
+                })
+
+            themes = []
+            try:
+                themes = json.loads(crow["themes_json"])
+            except Exception:
+                themes = []
+
+            cards.append({
+                "id": card_id,
+                "story_id": id,
+                "title": crow["title"],
+                "summary": crow["summary"],
+                "themes": themes,
+                "generated_from_revision": gen_rev,
+                "is_stale": is_stale,
+                "stale_reason": stale_reason,
+                "review_state": crow["review_state"],
+                "model_provenance": crow["model_provenance"],
+                "created_at": crow["created_at"],
+                "sources": sources,
+            })
+
+        has_stale = any(c["is_stale"] for c in cards)
+        review_status = "review_needed" if any(c["review_state"] == "draft" for c in cards) else "reviewed"
+
+        return {
+            "story_id": id,
+            "current_transcript_revision": current_revision,
+            "cards": cards,
+            "total": len(cards),
+            "has_stale_cards": has_stale,
+            "review_status": review_status,
+        }
+
+
+# Single Memory Card Details Endpoint
+@app.get("/api/cards/{id}")
+async def get_card_details(id: str) -> Dict[str, Any]:
+    """Retrieve details, evidence citations, and stale state for a single memory card."""
+    with get_db() as conn:
+        crow = conn.execute(
+            """
+            SELECT id, story_id, title, summary, themes_json,
+                   generated_from_revision, review_state, model_provenance, created_at
+            FROM memory_cards
+            WHERE id = ?;
+            """,
+            (id,)
+        ).fetchone()
+        if not crow:
+            return JSONResponse(
+                status_code=404,
+                content={"error": {"code": "CARD_NOT_FOUND", "message": f"Memory card '{id}' not found."}},
+            )
+
+        story_id = crow["story_id"]
+        story = conn.execute(
+            "SELECT id, transcript_revision, audio_duration_ms FROM stories WHERE id = ?;",
+            (story_id,)
+        ).fetchone()
+        current_revision = story["transcript_revision"] if story else crow["generated_from_revision"]
+        audio_duration_ms = story["audio_duration_ms"] if story else 0
+
+        is_stale = (crow["generated_from_revision"] != current_revision)
+        stale_reason = (
+            f"Transcript has been modified since generation (card revision {crow['generated_from_revision']} vs current revision {current_revision})."
+            if is_stale else None
+        )
+
+        sources_cursor = conn.execute(
+            """
+            SELECT ts.id, ts.segment_index, ts.start_ms, ts.end_ms, ts.text, ts.user_edited
+            FROM memory_sources ms
+            JOIN transcript_segments ts ON ms.segment_id = ts.id
+            WHERE ms.card_id = ? AND ts.story_id = ?
+            ORDER BY ts.segment_index ASC;
+            """,
+            (id, story_id)
+        )
+        sources = []
+        for srow in sources_cursor.fetchall():
+            start_ms = srow["start_ms"]
+            end_ms = srow["end_ms"]
+            timing_reliable = (
+                start_ms >= 0
+                and end_ms > start_ms
+                and (audio_duration_ms == 0 or end_ms <= audio_duration_ms + 1000)
+            )
+            sources.append({
+                "segment_id": srow["id"],
+                "segment_index": srow["segment_index"],
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "start_seconds": round(start_ms / 1000.0, 3),
+                "end_seconds": round(end_ms / 1000.0, 3),
+                "duration_seconds": round((end_ms - start_ms) / 1000.0, 3),
+                "text": srow["text"],
+                "user_edited": bool(srow["user_edited"]),
+                "story_id": story_id,
+                "audio_url": f"/api/stories/{story_id}/audio",
+                "transcript_revision": current_revision,
+                "timing_reliable": timing_reliable,
+                "seek_fallback_message": None if timing_reliable else "Precise timestamp unavailable; please listen from the beginning of the recording.",
+            })
+
+        themes = []
+        try:
+            themes = json.loads(crow["themes_json"])
+        except Exception:
+            themes = []
+
+        return {
+            "id": crow["id"],
+            "story_id": story_id,
+            "title": crow["title"],
+            "summary": crow["summary"],
+            "themes": themes,
+            "generated_from_revision": crow["generated_from_revision"],
+            "is_stale": is_stale,
+            "stale_reason": stale_reason,
+            "review_state": crow["review_state"],
+            "model_provenance": crow["model_provenance"],
+            "created_at": crow["created_at"],
+            "sources": sources,
+        }
+
+
+# Memory Card Sources Endpoint
+@app.get("/api/cards/{id}/sources")
+async def get_card_sources(id: str) -> Dict[str, Any]:
+    """Retrieve supporting transcript segments and audio seek metadata for a card."""
+    card = await get_card_details(id)
+    if isinstance(card, JSONResponse):
+        return card
+    return {
+        "card_id": id,
+        "story_id": card["story_id"],
+        "sources": card["sources"],
+    }
+
+
+# Memory Card Review State Update Endpoint (PATCH)
+class UpdateCardReviewRequest(BaseModel):
+    review_state: str = Field(..., pattern="^(draft|accepted|dismissed)$")
+
+
+@app.patch("/api/cards/{id}")
+async def update_card_review_state(id: str, payload: UpdateCardReviewRequest) -> Dict[str, Any]:
+    """
+    Update human review state (draft, accepted, or dismissed) of a memory card.
+    Enforces that evidence citations and model provenance cannot be tampered with.
+    """
+    with get_db() as conn:
+        card = conn.execute("SELECT id FROM memory_cards WHERE id = ?;", (id,)).fetchone()
+        if not card:
+            return JSONResponse(
+                status_code=404,
+                content={"error": {"code": "CARD_NOT_FOUND", "message": f"Memory card '{id}' not found."}},
+            )
+
+        conn.execute(
+            "UPDATE memory_cards SET review_state = ? WHERE id = ?;",
+            (payload.review_state, id)
+        )
+
+    return await get_card_details(id)
+
+
+# Minimal Functional Playback Demonstration Harness Endpoint
+DEMO_HTML_PATH = PROJECT_ROOT / "static" / "phase_c_demo.html"
+
+
+@app.get("/demo", response_class=FileResponse)
+@app.get("/phase-c-demo", response_class=FileResponse)
+async def get_phase_c_demo():
+    """Serve the minimal functional playback demonstration harness."""
+    if not DEMO_HTML_PATH.exists():
+        return JSONResponse(
+            status_code=404,
+            content={"error": {"code": "NOT_FOUND", "message": "Demo harness file not found."}}
+        )
+    return FileResponse(path=DEMO_HTML_PATH, media_type="text/html")
+
+
+# Primary EchoArchive Web Application Endpoints
+STATIC_DIR = PROJECT_ROOT / "static"
+INDEX_HTML_PATH = STATIC_DIR / "index.html"
+
+
+@app.get("/", response_class=FileResponse)
+@app.get("/app", response_class=FileResponse)
+async def get_index():
+    """Serve the primary EchoArchive application."""
+    if not INDEX_HTML_PATH.exists():
+        return JSONResponse(
+            status_code=404,
+            content={"error": {"code": "NOT_FOUND", "message": "EchoArchive frontend index not found."}}
+        )
+    return FileResponse(path=INDEX_HTML_PATH, media_type="text/html")
+
+
+# Mount /static directory for styles, scripts, and media assets
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+

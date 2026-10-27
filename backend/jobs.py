@@ -16,6 +16,15 @@ from backend.config import (
     TMP_DIR,
 )
 from backend.database import get_db
+from backend.evidence import (
+    EvidenceValidationError,
+    GroundedMemoryCard,
+    validate_memory_cards_batch,
+)
+from backend.extraction import (
+    ExtractionError,
+    extract_memories_from_segments,
+)
 from backend.media import MediaValidationError, normalize_to_whisper_wav
 from backend.transcription import (
     TranscriptionError,
@@ -29,6 +38,8 @@ VALID_STAGES = {
     "queued",
     "preparing",
     "transcribing",
+    "extracting",
+    "validating",
     "saving",
     "succeeded",
     "failed",
@@ -95,8 +106,8 @@ def recover_interrupted_jobs(db_path: Optional[Path] = None) -> int:
 
 class TranscriptionWorker:
     """
-    Single-worker in-process transcription queue manager with SQLite persistence.
-    Enforces maximum concurrency of 1 for heavy inference jobs.
+    Single-worker in-process inference queue manager with SQLite persistence.
+    Enforces maximum concurrency of 1 for heavy inference jobs (transcription & memory extraction).
     """
 
     def __init__(self, db_path: Optional[Path] = None, max_queue_size: int = MAX_QUEUED_JOBS):
@@ -115,7 +126,7 @@ class TranscriptionWorker:
             self._stop_event.clear()
             self._thread = threading.Thread(
                 target=self._worker_loop,
-                name="EchoArchiveTranscriptionWorker",
+                name="EchoArchiveInferenceWorker",
                 daemon=True,
             )
             self._thread.start()
@@ -137,25 +148,25 @@ class TranscriptionWorker:
             if not story:
                 raise StoryNotFoundError("STORY_NOT_FOUND", f"Story '{story_id}' does not exist.")
 
-            # 2. Check if an active transcription job is already queued or running for this story
+            # 2. Check if an active job is already queued or running for this story
             active_job = conn.execute(
                 """
-                SELECT id, status, stage FROM jobs
-                WHERE story_id = ? AND kind = 'transcribe' AND status IN ('queued', 'running');
+                SELECT id, kind, status, stage FROM jobs
+                WHERE story_id = ? AND status IN ('queued', 'running');
                 """,
                 (story_id,)
             ).fetchone()
             if active_job:
                 raise JobActiveError(
                     "JOB_ACTIVE",
-                    f"A transcription job ({active_job['id']}) is already {active_job['status']} for this story."
+                    f"A {active_job['kind']} job ({active_job['id']}) is already {active_job['status']} for this story."
                 )
 
             # 3. Check queue capacity
             if self._queue.full():
                 raise JobQueueFullError(
                     "QUEUE_CAPACITY_EXCEEDED",
-                    "The transcription queue is at maximum capacity. Please wait for existing jobs to complete."
+                    "The job queue is at maximum capacity. Please wait for existing jobs to complete."
                 )
 
             # 4. Create persistent job record
@@ -180,20 +191,106 @@ class TranscriptionWorker:
                     """
                     UPDATE jobs SET status = 'failed', stage = 'failed',
                     error_code = 'QUEUE_CAPACITY_EXCEEDED',
-                    error_message = 'The transcription queue is at capacity.',
+                    error_message = 'The job queue is at capacity.',
                     finished_at = ? WHERE id = ?
                     """,
                     (datetime.now(timezone.utc).isoformat(), job_id)
                 )
             raise JobQueueFullError(
                 "QUEUE_CAPACITY_EXCEEDED",
-                "The transcription queue is at maximum capacity. Please wait for existing jobs to complete."
+                "The job queue is at maximum capacity. Please wait for existing jobs to complete."
             )
 
         return {
             "job_id": job_id,
             "story_id": story_id,
             "kind": "transcribe",
+            "status": "queued",
+            "stage": "queued",
+        }
+
+    def enqueue_extraction(self, story_id: str, expected_revision: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Validate preconditions and queue a memory extraction job for a story.
+        Requires existing transcript (revision >= 1 and existing segments).
+        """
+        with get_db(self.db_path) as conn:
+            # 1. Verify story exists
+            story = conn.execute("SELECT id, transcript_revision FROM stories WHERE id = ?", (story_id,)).fetchone()
+            if not story:
+                raise StoryNotFoundError("STORY_NOT_FOUND", f"Story '{story_id}' does not exist.")
+
+            # 2. Verify transcript exists
+            if story["transcript_revision"] < 1:
+                raise JobError("NO_TRANSCRIPT", "Story has no transcript available for extraction. Transcribe audio first.")
+
+            seg_count = conn.execute("SELECT COUNT(*) FROM transcript_segments WHERE story_id = ?", (story_id,)).fetchone()[0]
+            if seg_count == 0:
+                raise JobError("NO_TRANSCRIPT", "Story has no transcript segments available for extraction.")
+
+            # 3. Optimistic revision check if expected_revision was provided
+            if expected_revision is not None and story["transcript_revision"] != expected_revision:
+                raise JobError(
+                    "REVISION_CONFLICT",
+                    f"Transcript revision mismatch. Expected {expected_revision}, but current revision is {story['transcript_revision']}."
+                )
+
+            # 4. Check if an active job already exists for this story
+            active_job = conn.execute(
+                """
+                SELECT id, kind, status, stage FROM jobs
+                WHERE story_id = ? AND status IN ('queued', 'running');
+                """,
+                (story_id,)
+            ).fetchone()
+            if active_job:
+                raise JobActiveError(
+                    "JOB_ACTIVE",
+                    f"A {active_job['kind']} job ({active_job['id']}) is already {active_job['status']} for this story."
+                )
+
+            # 5. Check queue capacity
+            if self._queue.full():
+                raise JobQueueFullError(
+                    "QUEUE_CAPACITY_EXCEEDED",
+                    "The job queue is at maximum capacity. Please wait for existing jobs to complete."
+                )
+
+            # 6. Create persistent job record
+            job_id = str(uuid.uuid4())
+            now_utc = datetime.now(timezone.utc).isoformat()
+            conn.execute(
+                """
+                INSERT INTO jobs (
+                    id, story_id, kind, status, stage, error_code, error_message, created_at
+                ) VALUES (?, ?, 'extract', 'queued', 'queued', NULL, NULL, ?);
+                """,
+                (job_id, story_id, now_utc)
+            )
+
+        # 7. Put job ID in bounded in-memory queue
+        try:
+            self._queue.put_nowait(job_id)
+        except queue.Full:
+            with get_db(self.db_path) as conn:
+                conn.execute(
+                    """
+                    UPDATE jobs SET status = 'failed', stage = 'failed',
+                    error_code = 'QUEUE_CAPACITY_EXCEEDED',
+                    error_message = 'The job queue is at capacity.',
+                    finished_at = ? WHERE id = ?
+                    """,
+                    (datetime.now(timezone.utc).isoformat(), job_id)
+                )
+            raise JobQueueFullError(
+                "QUEUE_CAPACITY_EXCEEDED",
+                "The job queue is at maximum capacity. Please wait for existing jobs to complete."
+            )
+
+        return {
+            "job_id": job_id,
+            "story_id": story_id,
+            "kind": "extract",
             "status": "queued",
             "stage": "queued",
         }
@@ -214,6 +311,21 @@ class TranscriptionWorker:
                 self._queue.task_done()
 
     def _process_job(self, job_id: str) -> None:
+        """Dispatch a single job to the appropriate handler based on kind."""
+        with get_db(self.db_path) as conn:
+            job = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            if not job:
+                logger.error("Job %s not found in database.", job_id)
+                return
+
+        if job["kind"] == "transcribe":
+            self._process_transcription_job(job_id)
+        elif job["kind"] == "extract":
+            self._process_extraction_job(job_id)
+        else:
+            self._fail_job(job_id, "UNKNOWN_JOB_KIND", f"Unknown job kind: {job['kind']}")
+
+    def _process_transcription_job(self, job_id: str) -> None:
         """Process a single transcription job through its documented stages."""
         # 1. Transition to running -> preparing
         now_utc = datetime.now(timezone.utc).isoformat()
@@ -295,6 +407,145 @@ class TranscriptionWorker:
         except Exception as e:
             logger.exception("Failed to persist transcript for job %s: %s", job_id, e)
             self._fail_job(job_id, "INTERNAL_ERROR", "Failed to persist transcript segments.")
+
+    def _process_extraction_job(self, job_id: str) -> None:
+        """Process a memory extraction job with local Qwen and evidence grounding."""
+        now_utc = datetime.now(timezone.utc).isoformat()
+        with get_db(self.db_path) as conn:
+            job = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            if not job:
+                return
+            story_id = job["story_id"]
+            story = conn.execute("SELECT * FROM stories WHERE id = ?", (story_id,)).fetchone()
+            if not story:
+                self._fail_job(job_id, "STORY_NOT_FOUND", "Associated story not found.")
+                return
+
+            extraction_revision = story["transcript_revision"]
+            if extraction_revision < 1:
+                self._fail_job(job_id, "NO_TRANSCRIPT", "Story has no transcript available for extraction.")
+                return
+
+            cursor = conn.execute(
+                """
+                SELECT id, segment_index, start_ms, end_ms, text
+                FROM transcript_segments
+                WHERE story_id = ?
+                ORDER BY segment_index ASC;
+                """,
+                (story_id,)
+            )
+            segments = [dict(row) for row in cursor.fetchall()]
+            if not segments:
+                self._fail_job(job_id, "NO_TRANSCRIPT", "No transcript segments found for story.")
+                return
+
+            # Transition to running -> preparing
+            conn.execute(
+                "UPDATE jobs SET status = 'running', stage = 'preparing', started_at = ? WHERE id = ?;",
+                (now_utc, job_id)
+            )
+
+        valid_segment_dict = {seg["id"]: seg["text"] for seg in segments}
+
+        # Transition to extracting
+        with get_db(self.db_path) as conn:
+            conn.execute("UPDATE jobs SET stage = 'extracting' WHERE id = ?;", (job_id,))
+
+        try:
+            raw_cards = extract_memories_from_segments(segments)
+        except ExtractionError as ee:
+            self._fail_job(job_id, ee.code, ee.message)
+            return
+        except Exception as e:
+            self._fail_job(job_id, "EXTRACTION_FAILED", f"Memory extraction failed: {str(e)}")
+            return
+
+        # Transition to validating
+        with get_db(self.db_path) as conn:
+            conn.execute("UPDATE jobs SET stage = 'validating' WHERE id = ?;", (job_id,))
+
+        try:
+            grounded_cards = validate_memory_cards_batch(raw_cards, valid_segment_dict, story_id)
+        except EvidenceValidationError as eve:
+            self._fail_job(job_id, eve.code, eve.message)
+            return
+        except Exception as e:
+            self._fail_job(job_id, "VALIDATION_FAILED", f"Evidence validation failed: {str(e)}")
+            return
+
+        # Transition to saving
+        with get_db(self.db_path) as conn:
+            conn.execute("UPDATE jobs SET stage = 'saving' WHERE id = ?;", (job_id,))
+
+        try:
+            self._save_extraction_results(job_id, story_id, extraction_revision, grounded_cards)
+        except Exception as e:
+            logger.exception("Failed to persist memory extraction for job %s: %s", job_id, e)
+            self._fail_job(job_id, "INTERNAL_ERROR", "Failed to persist memory cards.")
+
+    def _save_extraction_results(
+        self,
+        job_id: str,
+        story_id: str,
+        extraction_revision: int,
+        grounded_cards: List[GroundedMemoryCard],
+    ) -> None:
+        """
+        Transactionally verify transcript revision integrity, replace previous cards,
+        persist grounded cards and memory_sources, and mark job as succeeded.
+        """
+        now_utc = datetime.now(timezone.utc).isoformat()
+        with get_db(self.db_path) as conn:
+            # 1. Re-check story revision to prevent race conditions if transcript was edited during inference
+            story = conn.execute("SELECT transcript_revision FROM stories WHERE id = ?", (story_id,)).fetchone()
+            if not story:
+                self._fail_job(job_id, "STORY_NOT_FOUND", "Story no longer exists.")
+                return
+
+            if story["transcript_revision"] != extraction_revision:
+                self._fail_job(
+                    job_id,
+                    "REVISION_CONFLICT",
+                    f"Transcript revision changed from {extraction_revision} to {story['transcript_revision']} while extraction was in progress. Please re-run extraction with the latest transcript."
+                )
+                return
+
+            # 2. Delete previous memory cards for this story to avoid duplicate card sets
+            conn.execute("DELETE FROM memory_cards WHERE story_id = ?;", (story_id,))
+
+            # 3. Insert newly extracted grounded cards and sources atomically
+            for card in grounded_cards:
+                card_id = f"card-{uuid.uuid4().hex[:12]}"
+                themes_json = json.dumps(card.themes)
+                conn.execute(
+                    """
+                    INSERT INTO memory_cards (
+                        id, story_id, title, summary, themes_json,
+                        generated_from_revision, review_state, model_provenance, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, 'draft', 'qwen2.5:1.5b', ?);
+                    """,
+                    (card_id, story_id, card.title, card.summary, themes_json, extraction_revision, now_utc)
+                )
+
+                for seg_id in card.source_segment_ids:
+                    conn.execute(
+                        """
+                        INSERT INTO memory_sources (card_id, segment_id)
+                        VALUES (?, ?);
+                        """,
+                        (card_id, seg_id)
+                    )
+
+            # 4. Mark job as succeeded
+            conn.execute(
+                """
+                UPDATE jobs
+                SET status = 'succeeded', stage = 'succeeded', finished_at = ?
+                WHERE id = ?;
+                """,
+                (now_utc, job_id)
+            )
 
     def _save_transcript_results(self, job_id: str, story_id: str, segments: List[Any]) -> None:
         """
