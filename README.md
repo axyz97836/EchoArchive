@@ -11,23 +11,21 @@ The speaker's recording is the authoritative source of truth; local open-weight 
 ## Challenge Context
 
 - **Challenge:** Hacktoberfest 2026, Week 4 — *Ghost in the Machine* (October 26–31, 2026)
-- **Current Milestone:** **Phase D: Premium Frontend, Real Recording & Traceable Memory Experience** (Verified)
+- **Current Milestone:** **Phase E: Archive Search, Portable Exports, Safe Deletion & Privacy Hardening** (Verified)
 - **Target OS:** macOS (Apple Silicon `arm64` verified on Apple M2; Linux conditional on verification)
 
 ---
 
-## Phase D Verification Status
+## Phase E Verification Status
 
-Phase D delivers the complete user-facing EchoArchive web application featuring the approved **The Archive After Dark** visual design:
+Phase E delivers comprehensive archive search, self-contained portable exports, safe and explicit story deletion, and corrected transcript review semantics:
 
-1. **The Archive After Dark Design Foundation:** Crafted with approved palette tokens (Midnight Ink `#1B252B`, Aged Parchment `#F3E8D6`, Marigold Amber `#E5B65F`, Muted Burgundy `#8C4B4A`), editorial system serif headings, high-contrast readable controls, visible focus rings, and WCAG 2.2 AA best practices.
-2. **Screen 1: Home / Entry Experience:** Atmospheric landing experience explaining local-only guarantees, real-time readiness status badge, and clear calls to action without fake marketing testimonials.
-3. **Screen 2: Real Microphone Studio & Audio Ingest:** Browser microphone recording using `MediaRecorder` (detecting supported MIME types at runtime) with live Web Audio API signal level metering on HTML5 canvas, 5-minute duration cap, explicit consent checkbox, and file upload fallback (WAV, MP3, M4A, FLAC, OGG, WebM <= 25 MiB).
-4. **Screen 3: Transcription & Human Review:** Real background job status polling (`queued`, `transcribing`, `succeeded`), master HTML5 audio player with scrub bar and speed toggles, chronological transcript segments, segment-level playback seeking, inline human error correction with atomic optimistic concurrency (`expected_revision`), and explicit review confirmation (`POST /api/stories/{id}/review`).
-5. **Screen 4: Memory Extraction Pipeline:** Connects to local Qwen2.5 extraction API with truthful backend stage transitions (`queued`, `analyzing`, `validating`, `saving`, `succeeded`) and actionable recovery paths for offline Ollama or model errors.
-6. **Screen 5: Preserved Stories Archive:** Visual library of preserved stories with searchable filtering, duration, revision, and verified memory count badges.
-7. **Screen 6: Traceable Memory Cards:** The core experience—prominent memory titles, AI-generated summaries, themes, and **Verified Transcript Evidence** displayed on aged parchment with exact timestamps and "Listen to Spoken Passage" seeking buttons that trigger HTTP 206 byte-range audio playback with synchronized glow highlighting.
-8. **Automated Test Suite:** 77 tests (76 deterministic tests + 1 live local inference test) passing with 100% success.
+1. **Local Full-Text Search:** 100% offline parameterized SQLite search (`GET /api/search?q=...`) across story titles, speaker labels, chronological transcript segments, memory card titles, summaries, and themes with contextual snippets and direct audio seeking timestamps.
+2. **Portable Story Export:** Self-contained streaming ZIP export (`GET /api/stories/{id}/export`) containing original audio bytes, `story.json`, `transcript.json`, `memories.json`, SHA-256 verified `manifest.json` (`echoarchive-export-v1`), and a standalone offline `story.html` reader with zero external CDNs, fonts, or scripts.
+3. **Safe & Explicit Story Deletion:** Destructive deletion (`DELETE /api/stories/{id}`) with affirmative confirmation requirement (`422 UNCONFIRMED_DELETION`), active job collision protection (`409 JOB_ACTIVE`), cascading relational removal, and private media purge from `data/media/`.
+4. **Corrected Transcript Review Semantics:** Machine transcripts require human review (`transcript_reviewed_at = NULL`). Segment corrections invalidate review confirmation and mark prior memory cards stale. Memory extraction optionally enforces verified transcripts (`require_review: true`), and stale cards cannot be accepted (`409 STALE_MEMORY_CARD`).
+5. **Privacy & Data Control Center:** Built-in in-app modal explaining local storage paths, local AI boundaries, export/deletion operations, and clear disclosures regarding unencrypted local storage and physical SSD wear-leveling realities.
+6. **Automated Test Suite:** **102 tests passed** (101 deterministic tests + 1 live local inference test) with 100% pass rate.
 
 ---
 
@@ -126,7 +124,7 @@ Then visit [http://127.0.0.1:8766](http://127.0.0.1:8766) in your browser to exp
 ### 7. Run the Automated Test Suite
 
 ```bash
-# Run all 77 tests (deterministic and live inference)
+# Run all 102 tests (deterministic and live inference)
 pytest -v
 
 # Run only deterministic tests (with mocked external processes)

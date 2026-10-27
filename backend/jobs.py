@@ -209,14 +209,20 @@ class TranscriptionWorker:
             "stage": "queued",
         }
 
-    def enqueue_extraction(self, story_id: str, expected_revision: Optional[int] = None) -> Dict[str, Any]:
+    def enqueue_extraction(
+        self,
+        story_id: str,
+        expected_revision: Optional[int] = None,
+        require_review: bool = False,
+    ) -> Dict[str, Any]:
         """
         Validate preconditions and queue a memory extraction job for a story.
         Requires existing transcript (revision >= 1 and existing segments).
+        If require_review is True, rejects unreviewed stories.
         """
         with get_db(self.db_path) as conn:
             # 1. Verify story exists
-            story = conn.execute("SELECT id, transcript_revision FROM stories WHERE id = ?", (story_id,)).fetchone()
+            story = conn.execute("SELECT id, transcript_revision, transcript_reviewed_at FROM stories WHERE id = ?", (story_id,)).fetchone()
             if not story:
                 raise StoryNotFoundError("STORY_NOT_FOUND", f"Story '{story_id}' does not exist.")
 
@@ -227,6 +233,10 @@ class TranscriptionWorker:
             seg_count = conn.execute("SELECT COUNT(*) FROM transcript_segments WHERE story_id = ?", (story_id,)).fetchone()[0]
             if seg_count == 0:
                 raise JobError("NO_TRANSCRIPT", "Story has no transcript segments available for extraction.")
+
+            # 3. Verify human review confirmation if required
+            if require_review and story["transcript_reviewed_at"] is None:
+                raise JobError("REVIEW_REQUIRED", "Story transcript must be reviewed and confirmed before extraction.")
 
             # 3. Optimistic revision check if expected_revision was provided
             if expected_revision is not None and story["transcript_revision"] != expected_revision:

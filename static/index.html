@@ -38,6 +38,10 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
           Archive
         </button>
+        <button type="button" class="nav-link-btn" id="navPrivacyBtn" aria-label="Privacy and local data controls">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/></svg>
+          Privacy
+        </button>
 
         <!-- System Readiness Badge -->
         <div class="system-status-badge" id="systemStatusBadge" title="Local system readiness">
@@ -241,6 +245,14 @@
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 1 0 10 10H12V2z"/></svg>
             Extract Traceable Memories
           </button>
+          <button type="button" class="btn btn-secondary btn-sm" id="transcriptExportBtn" title="Export story as portable self-contained ZIP archive">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+            Export ZIP
+          </button>
+          <button type="button" class="btn btn-danger btn-sm" id="transcriptDeleteBtn" title="Permanently delete story and local audio">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+            Delete
+          </button>
         </div>
       </div>
 
@@ -305,8 +317,20 @@
           <p style="color: var(--color-parchment-muted); font-size: 0.9rem; margin: 0;" id="storiesCountLabel">Loading saved records...</p>
         </div>
         <div class="search-input-wrapper">
-          <input type="search" id="archiveSearchInput" class="form-input" placeholder="Search by title or speaker..." aria-label="Search stories">
+          <input type="search" id="archiveSearchInput" class="form-input" placeholder="Search stories, spoken transcripts, memories, themes..." aria-label="Search across archive">
         </div>
+      </div>
+
+      <!-- Archive Search Results Section -->
+      <div id="searchResultsSection" style="display: none; margin-bottom: var(--space-xl);">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-md); flex-wrap: wrap; gap: 8px;">
+          <div>
+            <h2 id="searchResultsHeading" class="feature-title" style="font-size: 1.25rem; margin: 0;">Archive Search Results</h2>
+            <p id="searchResultsSub" style="color: var(--color-parchment-muted); font-size: 0.88rem; margin: 2px 0 0 0;"></p>
+          </div>
+          <button type="button" class="btn btn-secondary btn-sm" id="clearSearchBtn">Clear Search</button>
+        </div>
+        <div id="searchResultsList" class="search-results-list" role="feed" aria-label="Search results across stories, transcripts, and memories"></div>
       </div>
 
       <!-- Empty State -->
@@ -338,10 +362,18 @@
           <h1 id="memoriesHeading" class="feature-title" style="font-size: 1.6rem; margin-bottom: 2px;">Traceable Memory Cards</h1>
           <p style="color: var(--color-parchment-muted); font-size: 0.9rem; margin: 0;" id="memoriesStoryMeta"></p>
         </div>
-        <div>
+        <div style="display: flex; gap: var(--space-sm); align-items: center; flex-wrap: wrap;">
           <button type="button" class="btn btn-outline-amber btn-sm" id="regenerateMemoriesBtn">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
             Regenerate Memories
+          </button>
+          <button type="button" class="btn btn-secondary btn-sm" id="memoriesExportBtn" title="Export story as portable self-contained ZIP archive">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+            Export ZIP
+          </button>
+          <button type="button" class="btn btn-danger btn-sm" id="memoriesDeleteBtn" title="Permanently delete story and local audio">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+            Delete
           </button>
         </div>
       </div>
@@ -362,6 +394,89 @@
     </section>
 
   </main>
+
+  <!-- Delete Story Confirmation Dialog -->
+  <div id="deleteConfirmModal" class="modal-backdrop" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="deleteModalTitle" tabindex="-1">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <div class="modal-icon-danger" aria-hidden="true">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+        </div>
+        <div>
+          <h2 id="deleteModalTitle" class="modal-title">Delete Story Permanently</h2>
+          <p class="modal-subtitle">Irreversible Local Archival Action</p>
+        </div>
+      </div>
+      <div class="modal-body">
+        <p style="margin-bottom: var(--space-md);">You are about to permanently delete <strong id="deleteStoryTitleLabel" style="color: var(--color-parchment-light);">this story</strong>.</p>
+        <div class="delete-warning-box">
+          <ul style="margin: 0; padding-left: 20px; font-size: 0.9rem; color: var(--color-parchment-muted);">
+            <li>The original local audio recording file will be permanently deleted.</li>
+            <li>All transcript segments and correction revisions will be removed.</li>
+            <li>All AI-generated memory cards and citations will be deleted.</li>
+            <li>Previously exported ZIP files outside EchoArchive remain intact.</li>
+          </ul>
+        </div>
+        <div class="consent-box" style="margin-top: var(--space-md);">
+          <input type="checkbox" id="deleteConfirmCheckbox" class="consent-checkbox">
+          <label for="deleteConfirmCheckbox" class="consent-text" style="color: var(--color-parchment); cursor: pointer;">
+            <strong>Affirmative Confirmation:</strong> I understand that this story and its local audio will be permanently deleted and cannot be recovered.
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" id="cancelDeleteBtn">Cancel</button>
+        <button type="button" class="btn btn-danger" id="confirmDeleteBtn" disabled>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+          Permanently Delete Story
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Privacy & Data Control Principles Modal -->
+  <div id="privacyModal" class="modal-backdrop" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="privacyModalTitle" tabindex="-1">
+    <div class="modal-dialog modal-dialog-lg">
+      <div class="modal-header">
+        <div class="modal-icon-info" aria-hidden="true">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/></svg>
+        </div>
+        <div>
+          <h2 id="privacyModalTitle" class="modal-title">Privacy & Data Control Principles</h2>
+          <p class="modal-subtitle">EchoArchive Local-First Architecture Guarantees</p>
+        </div>
+      </div>
+      <div class="modal-body privacy-body">
+        <section class="privacy-section">
+          <h3 class="privacy-section-title">1. What Stays on Your Computer</h3>
+          <p>EchoArchive binds strictly to loopback (<code>127.0.0.1:8766</code>). All data remains entirely on your computer. There is zero telemetry, zero analytics tracking, zero cloud synchronization, and zero third-party network requests.</p>
+        </section>
+        <section class="privacy-section">
+          <h3 class="privacy-section-title">2. Storage Boundaries</h3>
+          <p>Uploaded and recorded audio files are placed into private local directories under <code>data/media/</code> with server-generated UUIDs. Story metadata and transcripts are saved in a local SQLite database (<code>data/echoarchive.sqlite3</code>). Path traversal is strictly prevented.</p>
+        </section>
+        <section class="privacy-section">
+          <h3 class="privacy-section-title">3. Local Artificial Intelligence</h3>
+          <p>Speech recognition is executed locally via <code>whisper.cpp</code> and memory card extraction runs locally via <code>qwen2.5:1.5b</code> through Ollama on localhost. No speech, words, or summaries are ever uploaded to cloud AI providers.</p>
+        </section>
+        <section class="privacy-section">
+          <h3 class="privacy-section-title">4. Portable Story Export</h3>
+          <p>You can export any preserved story at any time as a portable, self-contained ZIP archive. Exports include original audio in its native format, UTF-8 JSON transcripts, memory cards, a SHA-256 manifest, and a static offline HTML reader with zero remote dependencies.</p>
+        </section>
+        <section class="privacy-section">
+          <h3 class="privacy-section-title">5. Safe & Irreversible Deletion</h3>
+          <p>Deleting a story requires explicit affirmative confirmation. Deletion permanently removes SQLite records (metadata, segments, cards) and unlinks media files from your drive. Active jobs block deletion to prevent data corruption.</p>
+        </section>
+        <section class="privacy-section privacy-limitations">
+          <h3 class="privacy-section-title" style="color: var(--color-amber);">6. Transparent Limitations (What is NOT Provided)</h3>
+          <p>EchoArchive does not provide cloud backups or automatic disaster recovery—users are responsible for backing up their export archives. Data is not encrypted at rest by the application; we recommend enabling full-disk encryption (macOS FileVault or BitLocker). Deletion uses standard operating system unlinking, not DoD-standard forensic physical sector overwrite on SSDs.</p>
+        </section>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" id="closePrivacyBtn">Close</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Live Announcer for Screen Readers -->
   <div id="srAnnouncer" class="sr-only" aria-live="polite" aria-atomic="true"></div>

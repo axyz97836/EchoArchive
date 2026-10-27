@@ -26,20 +26,24 @@ from backend.config import (
     HOST,
     MEDIA_DIR,
     OLLAMA_BASE_URL,
+    ORIGINAL_TRANSCRIPTS_DIR,
     PORT,
     PROJECT_ROOT,
     QWEN_MODEL_NAME,
+    TMP_DIR,
     WHISPER_CLI_PATH,
     WHISPER_MODEL_PATH,
     ensure_storage_directories,
 )
 from backend.database import get_db, init_db
 from backend.evidence import EvidenceValidationError
+from backend.export import ExportError, build_story_export_zip
 from backend.extraction import (
     ExtractionError,
     check_ollama_available,
     check_qwen_model_available,
 )
+from backend.search import search_archive
 from backend.jobs import (
     JobActiveError,
     JobError,
@@ -462,6 +466,28 @@ async def list_stories(
         return {"stories": story_list, "total": total}
 
 
+# Archive Search Endpoint
+@app.get("/api/search")
+async def search_stories_and_memories(
+    q: str = Query(..., min_length=1, max_length=100),
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+) -> Dict[str, Any]:
+    """
+    Search across stories, transcript segments, and memory cards using parameterized local search.
+    Bounded query length, bounds results, distinguishes transcript evidence from AI summaries.
+    """
+    trimmed_q = q.strip()
+    if not trimmed_q:
+        return JSONResponse(
+            status_code=422,
+            content={"error": {"code": "INVALID_QUERY", "message": "Search query cannot be empty or whitespace only."}},
+        )
+
+    with get_db() as conn:
+        return search_archive(conn, trimmed_q, limit=limit, offset=offset)
+
+
 # Story Details Endpoint
 @app.get("/api/stories/{id}")
 async def get_story(id: str) -> Dict[str, Any]:
@@ -587,6 +613,171 @@ async def get_story_audio(id: str, request: Request):
         media_type=media_type,
         headers={"Accept-Ranges": "bytes"},
     )
+
+
+# Portable Story Export Endpoint
+@app.get("/api/stories/{id}/export")
+async def export_story(id: str):
+    """
+    Generate and stream a self-contained portable ZIP archive for a single story.
+    Includes original recording audio, story.json, transcript.json, memories.json,
+    manifest.json with SHA-256 checksums, and an offline-readable HTML document.
+    Rejects active jobs with 409 JOB_ACTIVE.
+    """
+    with get_db() as conn:
+        try:
+            zip_buffer = build_story_export_zip(conn, id)
+        except ExportError as ee:
+            status_code = 500
+            if ee.code in ("STORY_NOT_FOUND", "AUDIO_NOT_FOUND"):
+                status_code = 404
+            elif ee.code == "JOB_ACTIVE":
+                status_code = 409
+            elif ee.code in ("FORBIDDEN", "SECURITY_ERROR"):
+                status_code = 403
+            return JSONResponse(
+                status_code=status_code,
+                content={"error": {"code": ee.code, "message": ee.message}},
+            )
+        except Exception as e:
+            logger.exception("Unexpected error exporting story %s: %s", id, e)
+            return JSONResponse(
+                status_code=500,
+                content={"error": {"code": "EXPORT_FAILED", "message": "Failed to create story export archive."}},
+            )
+
+    zip_bytes = zip_buffer.getvalue()
+    safe_filename = f"echoarchive-{id}.zip"
+    return Response(
+        content=zip_bytes,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_filename}"',
+            "Content-Length": str(len(zip_bytes)),
+        },
+    )
+
+
+# Safe & Explicit Story Deletion Endpoint
+@app.delete("/api/stories/{id}")
+async def delete_story(
+    id: str,
+    request: Request,
+    confirm: Optional[bool] = Query(None),
+) -> Dict[str, Any]:
+    """
+    Permanently delete a story and its associated local audio and transcripts.
+    Requires explicit affirmative confirmation (confirm=true).
+    Rejects active jobs (409 JOB_ACTIVE).
+    Cascades removal of SQLite records and cleans disk files safely.
+    """
+    # 1. Verify confirmation
+    is_confirmed = False
+    if confirm is True:
+        is_confirmed = True
+    elif request.headers.get("content-type", "").startswith("application/json"):
+        try:
+            body = await request.json()
+            if isinstance(body, dict) and body.get("confirm") is True:
+                is_confirmed = True
+        except Exception:
+            pass
+
+    if not is_confirmed:
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": {
+                    "code": "CONFIRMATION_REQUIRED",
+                    "message": "Explicit confirmation (confirm=true) is required to permanently delete a story.",
+                }
+            },
+        )
+
+    # 2. Check story exists and active jobs
+    with get_db() as conn:
+        story = conn.execute("SELECT * FROM stories WHERE id = ?;", (id,)).fetchone()
+        if not story:
+            return JSONResponse(
+                status_code=404,
+                content={"error": {"code": "STORY_NOT_FOUND", "message": f"Story '{id}' was not found."}},
+            )
+
+        active_job = conn.execute(
+            """
+            SELECT id, kind, status FROM jobs
+            WHERE story_id = ? AND status IN ('queued', 'running');
+            """,
+            (id,),
+        ).fetchone()
+        if active_job:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error": {
+                        "code": "JOB_ACTIVE",
+                        "message": f"Cannot delete story while a {active_job['kind']} job ({active_job['id']}) is actively running.",
+                    }
+                },
+            )
+
+        # 3. Locate media file and boundary verify
+        audio_relpath = story["audio_relpath"]
+        audio_disk_path = (DATA_DIR / audio_relpath).resolve()
+        try:
+            audio_disk_path.relative_to(MEDIA_DIR.resolve())
+        except ValueError:
+            return JSONResponse(
+                status_code=403,
+                content={"error": {"code": "FORBIDDEN", "message": "Access to path outside media directory is denied."}},
+            )
+
+        # 4. Delete SQLite story record (Cascading foreign keys delete segments, cards, sources, jobs)
+        conn.execute("DELETE FROM stories WHERE id = ?;", (id,))
+
+    # 5. Delete private filesystem files
+    cleanup_errors = []
+    if audio_disk_path.exists():
+        try:
+            audio_disk_path.unlink()
+        except Exception as e:
+            logger.error("Failed to delete audio file %s: %s", audio_disk_path, e)
+            cleanup_errors.append("audio file")
+
+    orig_path = ORIGINAL_TRANSCRIPTS_DIR / f"{id}.json"
+    if orig_path.exists():
+        try:
+            orig_path.unlink()
+        except Exception as e:
+            logger.error("Failed to delete original transcript %s: %s", orig_path, e)
+            cleanup_errors.append("original transcript")
+
+    # Clean any temp files matching this story
+    try:
+        for tmp_file in TMP_DIR.glob(f"*{id}*"):
+            try:
+                tmp_file.unlink()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    if cleanup_errors:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "code": "DELETE_INCOMPLETE",
+                    "message": "Story metadata was removed, but cleanup of local media files was incomplete.",
+                }
+            },
+        )
+
+    return {
+        "deleted": True,
+        "story_id": id,
+        "message": "Story, transcript segments, memory cards, and original audio were permanently deleted.",
+    }
 
 
 # Transcription Initiation Endpoint
@@ -728,10 +919,10 @@ async def update_transcript_segment(
         update_cursor = conn.execute(
             """
             UPDATE stories
-            SET transcript_revision = ?, transcript_reviewed_at = ?, updated_at = ?
+            SET transcript_revision = ?, transcript_reviewed_at = NULL, updated_at = ?
             WHERE id = ? AND transcript_revision = ?;
             """,
-            (new_revision, now_utc, now_utc, id, payload.expected_revision),
+            (new_revision, now_utc, id, payload.expected_revision),
         )
         if update_cursor.rowcount == 0:
             return JSONResponse(
@@ -764,7 +955,7 @@ async def update_transcript_segment(
                 "user_edited": 1,
             },
             "transcript_revision": new_revision,
-            "transcript_reviewed_at": now_utc,
+            "transcript_reviewed_at": None,
         }
 
 
@@ -805,6 +996,7 @@ async def confirm_story_review(id: str) -> Dict[str, Any]:
 # Memory Extraction Initiation Endpoint
 class ExtractMemoriesRequest(BaseModel):
     expected_revision: Optional[int] = Field(None, ge=1)
+    require_review: Optional[bool] = Field(False)
 
 
 @app.post("/api/stories/{id}/extract", status_code=202)
@@ -815,9 +1007,11 @@ async def start_memory_extraction(
     """
     Start asynchronous grounded memory extraction using local Qwen2.5.
     Requires an eligible story with a completed transcript.
+    Optionally enforces prior human review verification if require_review is True.
     """
     expected_rev = payload.expected_revision if payload else None
-    job_info = global_worker.enqueue_extraction(id, expected_revision=expected_rev)
+    req_review = bool(payload.require_review) if payload and payload.require_review is not None else False
+    job_info = global_worker.enqueue_extraction(id, expected_revision=expected_rev, require_review=req_review)
     return job_info
 
 
@@ -1052,13 +1246,33 @@ async def update_card_review_state(id: str, payload: UpdateCardReviewRequest) ->
     """
     Update human review state (draft, accepted, or dismissed) of a memory card.
     Enforces that evidence citations and model provenance cannot be tampered with.
+    Rejects accepting stale memory cards where transcript has been revised.
     """
     with get_db() as conn:
-        card = conn.execute("SELECT id FROM memory_cards WHERE id = ?;", (id,)).fetchone()
+        card = conn.execute(
+            """
+            SELECT mc.id, mc.generated_from_revision, s.transcript_revision
+            FROM memory_cards mc
+            JOIN stories s ON mc.story_id = s.id
+            WHERE mc.id = ?;
+            """,
+            (id,)
+        ).fetchone()
         if not card:
             return JSONResponse(
                 status_code=404,
                 content={"error": {"code": "CARD_NOT_FOUND", "message": f"Memory card '{id}' not found."}},
+            )
+
+        if payload.review_state == "accepted" and card["generated_from_revision"] != card["transcript_revision"]:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error": {
+                        "code": "STALE_MEMORY_CARD",
+                        "message": "Cannot accept a stale memory card. Re-run memory extraction to generate current cards.",
+                    }
+                },
             )
 
         conn.execute(
