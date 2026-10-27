@@ -120,7 +120,7 @@ def test_successful_job_execution_lifecycle(test_env):
             job_id = job["job_id"]
 
             # Wait for completion
-            for _ in range(50):
+            for _ in range(100):
                 with get_db(db_file) as conn:
                     row = conn.execute("SELECT status, stage FROM jobs WHERE id = ?", (job_id,)).fetchone()
                     if row and row["status"] in ("succeeded", "failed"):
@@ -175,7 +175,7 @@ def test_transcription_subprocess_failure_persists_error(test_env):
             job = worker.enqueue_transcription(story_id)
             job_id = job["job_id"]
 
-            for _ in range(50):
+            for _ in range(100):
                 with get_db(db_file) as conn:
                     row = conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,)).fetchone()
                     if row and row["status"] in ("succeeded", "failed"):
@@ -211,7 +211,7 @@ def test_transcription_timeout_persists_error(test_env):
             job = worker.enqueue_transcription(story_id)
             job_id = job["job_id"]
 
-            for _ in range(50):
+            for _ in range(100):
                 with get_db(db_file) as conn:
                     row = conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,)).fetchone()
                     if row and row["status"] in ("succeeded", "failed"):

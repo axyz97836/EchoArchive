@@ -94,7 +94,17 @@ def probe_audio_duration(file_path: Path) -> float:
                     duration = frames / float(rate)
                     return duration
         except (wave.Error, EOFError):
-            pass
+            # If the file claimed to be WAV but lacks a valid RIFF/WAVE header, it is corrupted/unsupported
+            try:
+                with open(file_path, "rb") as f:
+                    hdr = f.read(12)
+                if not hdr.startswith(b"RIFF") or b"WAVE" not in hdr:
+                    raise MediaValidationError(
+                        "UNSUPPORTED_AUDIO",
+                        "Audio file contains invalid or corrupted data and could not be decoded."
+                    )
+            except OSError:
+                pass
 
     # Fall back to FFmpeg probe
     if not check_ffmpeg_available():

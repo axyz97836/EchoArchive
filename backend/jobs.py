@@ -202,7 +202,7 @@ class TranscriptionWorker:
         """Worker loop processing jobs one by one."""
         while not self._stop_event.is_set():
             try:
-                job_id = self._queue.get(timeout=0.5)
+                job_id = self._queue.get(timeout=0.1)
             except queue.Empty:
                 continue
 

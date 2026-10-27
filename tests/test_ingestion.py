@@ -32,8 +32,21 @@ def setup_test_environment(tmp_path: Path):
     """Ensure clean isolated data directories for each ingestion test."""
     test_db = tmp_path / "test_echoarchive.sqlite3"
     init_db(test_db)
+    media_dir = tmp_path / "media"
+    media_dir.mkdir(parents=True, exist_ok=True)
+    tmp_dir = tmp_path / "tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    orig_dir = tmp_path / "original_transcripts"
+    orig_dir.mkdir(parents=True, exist_ok=True)
+
     with patch("backend.main.get_db", lambda: get_db(test_db)), \
-         patch("backend.jobs.get_db", lambda: get_db(test_db)):
+         patch("backend.jobs.get_db", lambda: get_db(test_db)), \
+         patch("backend.main.DATA_DIR", tmp_path), \
+         patch("backend.main.MEDIA_DIR", media_dir), \
+         patch("backend.media.TMP_DIR", tmp_dir), \
+         patch("backend.media.MEDIA_DIR", media_dir), \
+         patch("backend.jobs.DATA_DIR", tmp_path), \
+         patch("backend.jobs.ORIGINAL_TRANSCRIPTS_DIR", orig_dir):
         yield
 
 
