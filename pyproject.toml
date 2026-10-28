@@ -1,6 +1,6 @@
 [project]
 name = "echoarchive"
-version = "0.1.0"
+version = "1.0.0"
 description = "Traceable spoken memory preservation using local speech recognition and local open-weight language models."
 readme = "README.md"
 requires-python = ">=3.11"

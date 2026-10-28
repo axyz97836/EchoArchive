@@ -37,6 +37,9 @@ Every AI-generated memory card in EchoArchive is verifiably grounded in the spea
 
 ## Demo
 
+> **Demonstration Video:** *[Pending Final Video Recording & User Approval — URL will be placed here]*  
+> A complete timed narration and scene-by-scene recording plan using synthetic audio is documented in [`docs/DEMO_GUIDE_AND_SCRIPT.md`](https://github.com/axyz97836/EchoArchive/blob/develop/docs/DEMO_GUIDE_AND_SCRIPT.md).
+
 The complete EchoArchive user journey follows six coordinated screens designed in the archival **Archive After Dark** design system (Midnight Ink `#1B252B`, Aged Parchment `#F3E8D6`, Marigold Amber `#E5B65F`, and Muted Burgundy `#8C4B4A`):
 
 ### The 6-Screen Architecture
