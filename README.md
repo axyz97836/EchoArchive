@@ -11,21 +11,21 @@ The speaker's recording is the authoritative source of truth; local open-weight 
 ## Challenge Context
 
 - **Challenge:** Hacktoberfest 2026, Week 4 — *Ghost in the Machine* (October 26–31, 2026)
-- **Current Milestone:** **Phase E: Archive Search, Portable Exports, Safe Deletion & Privacy Hardening** (Verified)
+- **Current Milestone:** **Phase F: Final Security Hardening, Comprehensive Verification & Release Preparation** (Verified)
 - **Target OS:** macOS (Apple Silicon `arm64` verified on Apple M2; Linux conditional on verification)
 
 ---
 
-## Phase E Verification Status
+## Phase F Verification Status
 
-Phase E delivers comprehensive archive search, self-contained portable exports, safe and explicit story deletion, and corrected transcript review semantics:
+Phase F delivers final security hardening, robust transcript review enforcement at the backend API boundary, durable interruption-safe deletion journaling, audited portable ZIP exports, and comprehensive end-to-end verification:
 
-1. **Local Full-Text Search:** 100% offline parameterized SQLite search (`GET /api/search?q=...`) across story titles, speaker labels, chronological transcript segments, memory card titles, summaries, and themes with contextual snippets and direct audio seeking timestamps.
-2. **Portable Story Export:** Self-contained streaming ZIP export (`GET /api/stories/{id}/export`) containing original audio bytes, `story.json`, `transcript.json`, `memories.json`, SHA-256 verified `manifest.json` (`echoarchive-export-v1`), and a standalone offline `story.html` reader with zero external CDNs, fonts, or scripts.
-3. **Safe & Explicit Story Deletion:** Destructive deletion (`DELETE /api/stories/{id}`) with affirmative confirmation requirement (`422 UNCONFIRMED_DELETION`), active job collision protection (`409 JOB_ACTIVE`), cascading relational removal, and private media purge from `data/media/`.
-4. **Corrected Transcript Review Semantics:** Machine transcripts require human review (`transcript_reviewed_at = NULL`). Segment corrections invalidate review confirmation and mark prior memory cards stale. Memory extraction optionally enforces verified transcripts (`require_review: true`), and stale cards cannot be accepted (`409 STALE_MEMORY_CARD`).
-5. **Privacy & Data Control Center:** Built-in in-app modal explaining local storage paths, local AI boundaries, export/deletion operations, and clear disclosures regarding unencrypted local storage and physical SSD wear-leveling realities.
-6. **Automated Test Suite:** **102 tests passed** (101 deterministic tests + 1 live local inference test) with 100% pass rate.
+1. **Enforced Transcript Review at API Boundary:** Machine-generated transcripts start strictly unreviewed (`transcript_reviewed_at = NULL`). Segment corrections invalidate review confirmation and mark prior memory cards stale. Memory extraction unconditionally rejects unreviewed transcripts (`422 REVIEW_REQUIRED`), public bypass attempts (`require_review: false`) are rejected with `422 REVIEW_BYPASS_FORBIDDEN`, and regeneration after re-review uses the latest transcript revision.
+2. **Durable Crash-Safe Deletion Journal:** Story deletion (`DELETE /api/stories/{id}?confirm=true`) uses a staged SQLite cleanup journal (`deletion_journal`) and worker concurrency lock. Deletion transactionally removes database records before unlinking media files. In the event of an unexpected interruption or power loss, pending unlinks are automatically reconciled on server startup or repeated delete invocation (`recover_pending_deletions`). Active jobs safely reject deletion with `409 JOB_ACTIVE`.
+3. **Audited Portable Story Export:** Streaming ZIP generator (`GET /api/stories/{id}/export`) embeds pristine original audio bytes, `story.json`, `transcript.json`, `memories.json`, SHA-256 verified `manifest.json` (`echoarchive-export-v1`), and an offline standalone reader (`story.html`). Memory cards are explicitly labeled as `AI Interpretation`, all user content is HTML-escaped, and concurrent edits raise `409 REVISION_CONFLICT` to prevent corrupt exports.
+4. **Local Full-Text Search:** 100% offline parameterized SQLite search (`GET /api/search?q=...`) across story titles, speaker labels, chronological transcript segments, memory card titles, summaries, and themes with contextual snippets and direct audio seeking timestamps.
+5. **Real Local AI Verification:** Genuine offline inference runs verified on Apple Silicon: `whisper.cpp` (`ggml-tiny.en.bin`) for Metal GPU speech recognition and `qwen2.5:1.5b` via local Ollama for grounded memory extraction.
+6. **Automated Test Suite:** **116 automated tests passed** (115 deterministic unit/integration tests + 1 live speech-and-memory pipeline test) with 100% pass rate.
 
 ---
 
@@ -105,11 +105,15 @@ Execute the complete Phase B workflow (synthetic audio ingestion -> background j
 python scripts/smoke_phase_b_integration.py
 ```
 
-### 6. Launch the EchoArchive Web Application (Phase D)
+### 6. Launch the EchoArchive Web Application
 
-Start the local FastAPI server and open the web application:
+Start the local server using the startup helper or directly via Uvicorn:
 
 ```bash
+# Using the startup helper (verifies dependencies and starts on loopback)
+./run.sh
+
+# Or directly with uvicorn:
 uvicorn backend.main:app --host 127.0.0.1 --port 8766
 ```
 
@@ -118,13 +122,14 @@ Then visit [http://127.0.0.1:8766](http://127.0.0.1:8766) in your browser to exp
 - **Record / Upload:** Microphone recording with live Web Audio level meter and affirmative consent.
 - **Transcript Review:** Chronological segments, inline human correction with optimistic concurrency, and review confirmation.
 - **Memory Extraction:** Stage stepper tracking local Qwen inference.
-- **Archive:** Preserved story library with verified memory counts.
+- **Archive:** Preserved story library with full-text search and verified memory counts.
 - **Traceable Memory Detail:** Memory cards citing grounded audio passages with click-to-seek playback.
+- **Data Governance:** Portable self-contained ZIP export and safe, journaled story deletion.
 
 ### 7. Run the Automated Test Suite
 
 ```bash
-# Run all 102 tests (deterministic and live inference)
+# Run all 116 tests (deterministic and live inference)
 pytest -v
 
 # Run only deterministic tests (with mocked external processes)
@@ -132,6 +137,14 @@ pytest -v -m "not live"
 
 # Run only live inference integration tests
 pytest -v -m "live"
+```
+
+### 8. Run Full End-to-End Real Local AI Verification
+
+Execute the complete 15-step real-world integration verification on localhost:
+
+```bash
+python scripts/smoke_phase_f_full_e2e.py
 ```
 
 ---

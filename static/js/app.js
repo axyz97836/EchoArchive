@@ -586,8 +586,16 @@
       `;
     }
 
-    // Enable memory extraction if segments exist
-    el.proceedToExtractBtn.disabled = state.segments.length === 0;
+    // Enable memory extraction only if segments exist AND transcript is confirmed reviewed
+    const canExtract = state.segments.length > 0 && !!story.is_reviewed;
+    el.proceedToExtractBtn.disabled = !canExtract;
+    if (!story.is_reviewed && state.segments.length > 0) {
+      el.proceedToExtractBtn.title = "Review and confirm the transcript above before finding moments.";
+    } else if (state.segments.length === 0) {
+      el.proceedToExtractBtn.title = "Transcript segments required.";
+    } else {
+      el.proceedToExtractBtn.title = "Find meaningful moments grounded in the transcript.";
+    }
 
     if (el.transcriptExportBtn) {
       el.transcriptExportBtn.onclick = () => exportStoryZip(story.id);
@@ -843,7 +851,9 @@
     el.extractErrCode.textContent = code || "EXTRACTION_FAILED";
     let message = msg || "An error occurred during local memory extraction.";
 
-    if (code === "OLLAMA_UNAVAILABLE") {
+    if (code === "REVIEW_REQUIRED" || code === "REVIEW_BYPASS_FORBIDDEN") {
+      message = "Transcript must be confirmed by human review before memory extraction. Please return to the transcript workspace and confirm review.";
+    } else if (code === "OLLAMA_UNAVAILABLE") {
       message = "Ollama is not running at 127.0.0.1:11434. Please start Ollama locally.";
     } else if (code === "MODEL_NOT_FOUND") {
       message = "Model qwen2.5:1.5b is missing. Run 'ollama pull qwen2.5:1.5b'.";
@@ -857,6 +867,11 @@
 
   async function triggerMemoryExtraction() {
     if (!state.currentStoryId) return;
+    if (!state.currentStory?.is_reviewed) {
+      showToast("Transcript review confirmation is required before extracting memories.", "error");
+      loadStoryWorkspace(state.currentStoryId);
+      return;
+    }
     navigateTo("screenExtracting");
     el.extractionErrorBox.style.display = "none";
     el.retryExtractionBtn.style.display = "none";

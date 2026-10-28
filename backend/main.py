@@ -669,7 +669,8 @@ async def delete_story(
     Permanently delete a story and its associated local audio and transcripts.
     Requires explicit affirmative confirmation (confirm=true).
     Rejects active jobs (409 JOB_ACTIVE).
-    Cascades removal of SQLite records and cleans disk files safely.
+    Uses a durable deletion journal and worker concurrency barrier to ensure crash-safe
+    and interruption-recoverable deletion across database and filesystem boundaries.
     """
     # 1. Verify confirmation
     is_confirmed = False
@@ -694,90 +695,182 @@ async def delete_story(
             },
         )
 
-    # 2. Check story exists and active jobs
-    with get_db() as conn:
-        story = conn.execute("SELECT * FROM stories WHERE id = ?;", (id,)).fetchone()
-        if not story:
-            return JSONResponse(
-                status_code=404,
-                content={"error": {"code": "STORY_NOT_FOUND", "message": f"Story '{id}' was not found."}},
-            )
+    # 2. Acquire per-story concurrency lock with worker
+    with global_worker.get_story_lock(id):
+        # 3. Check if story exists in database or deletion_journal
+        with get_db() as conn:
+            story = conn.execute("SELECT * FROM stories WHERE id = ?;", (id,)).fetchone()
+            if not story:
+                # Check if this story is an interrupted deletion in deletion_journal
+                journal_entry = conn.execute(
+                    "SELECT * FROM deletion_journal WHERE story_id = ?;", (id,)
+                ).fetchone()
+                if journal_entry:
+                    # Retry completing the cleanup
+                    retry_errors = []
+                    if journal_entry["audio_relpath"]:
+                        try:
+                            a_path = (DATA_DIR / journal_entry["audio_relpath"]).resolve()
+                            a_path.relative_to(MEDIA_DIR.resolve())
+                            if a_path.is_symlink():
+                                logger.warning("Refusing to delete symlink audio %s", a_path)
+                            elif a_path.exists():
+                                a_path.unlink()
+                        except Exception as e:
+                            logger.error("Failed to retry unlinking audio %s: %s", journal_entry["audio_relpath"], e)
+                            retry_errors.append("audio file")
 
-        active_job = conn.execute(
-            """
-            SELECT id, kind, status FROM jobs
-            WHERE story_id = ? AND status IN ('queued', 'running');
-            """,
-            (id,),
-        ).fetchone()
-        if active_job:
+                    if journal_entry["original_transcript_path"]:
+                        try:
+                            t_path = Path(journal_entry["original_transcript_path"]).resolve()
+                            t_path.relative_to(ORIGINAL_TRANSCRIPTS_DIR.resolve())
+                            if t_path.is_symlink():
+                                logger.warning("Refusing to delete symlink transcript %s", t_path)
+                            elif t_path.exists():
+                                t_path.unlink()
+                        except Exception as e:
+                            logger.error("Failed to retry unlinking transcript: %s", e)
+                            retry_errors.append("original transcript")
+
+                    try:
+                        for tmp_file in TMP_DIR.glob(f"*{id}*"):
+                            try:
+                                if not tmp_file.is_symlink() and tmp_file.exists():
+                                    tmp_file.unlink()
+                            except OSError:
+                                pass
+                    except Exception:
+                        pass
+
+                    if not retry_errors:
+                        conn.execute("DELETE FROM deletion_journal WHERE id = ?;", (journal_entry["id"],))
+                        return {
+                            "deleted": True,
+                            "story_id": id,
+                            "message": "Pending deletion completed successfully.",
+                        }
+                    else:
+                        return JSONResponse(
+                            status_code=500,
+                            content={
+                                "error": {
+                                    "code": "DELETE_INCOMPLETE",
+                                    "message": f"Story metadata was removed, but cleanup of local media files was incomplete ({', '.join(retry_errors)}). Cleanup has been journaled and will be retried automatically.",
+                                }
+                            },
+                        )
+
+                return JSONResponse(
+                    status_code=404,
+                    content={"error": {"code": "STORY_NOT_FOUND", "message": f"Story '{id}' was not found."}},
+                )
+
+            # Check for active jobs
+            active_job = conn.execute(
+                """
+                SELECT id, kind, status FROM jobs
+                WHERE story_id = ? AND status IN ('queued', 'running');
+                """,
+                (id,),
+            ).fetchone()
+            if active_job:
+                return JSONResponse(
+                    status_code=409,
+                    content={
+                        "error": {
+                            "code": "JOB_ACTIVE",
+                            "message": f"Cannot delete story while a {active_job['kind']} job ({active_job['id']}) is actively running.",
+                        }
+                    },
+                )
+
+            # 4. Locate media file and boundary verify
+            audio_relpath = story["audio_relpath"]
+            audio_disk_path = (DATA_DIR / audio_relpath).resolve()
+            try:
+                audio_disk_path.relative_to(MEDIA_DIR.resolve())
+            except ValueError:
+                return JSONResponse(
+                    status_code=403,
+                    content={"error": {"code": "FORBIDDEN", "message": "Access to path outside media directory is denied."}},
+                )
+
+            if audio_disk_path.is_symlink():
+                return JSONResponse(
+                    status_code=403,
+                    content={"error": {"code": "FORBIDDEN", "message": "Symlink media files are rejected."}},
+                )
+
+            orig_path = (ORIGINAL_TRANSCRIPTS_DIR / f"{id}.json").resolve()
+            try:
+                orig_path.relative_to(ORIGINAL_TRANSCRIPTS_DIR.resolve())
+            except ValueError:
+                return JSONResponse(
+                    status_code=403,
+                    content={"error": {"code": "FORBIDDEN", "message": "Access to path outside transcripts directory is denied."}},
+                )
+
+            # 5. Staged durable deletion: record to deletion_journal and delete from stories in one transaction
+            journal_id = f"del-{uuid.uuid4().hex[:12]}"
+            now_utc = datetime.now(timezone.utc).isoformat()
+            conn.execute(
+                """
+                INSERT INTO deletion_journal (id, story_id, audio_relpath, original_transcript_path, created_at)
+                VALUES (?, ?, ?, ?, ?);
+                """,
+                (journal_id, id, audio_relpath, str(orig_path), now_utc),
+            )
+            # Cascading foreign keys delete segments, cards, sources, jobs
+            conn.execute("DELETE FROM stories WHERE id = ?;", (id,))
+
+        # 6. Delete private filesystem files
+        cleanup_errors = []
+        if audio_disk_path.exists():
+            try:
+                if not audio_disk_path.is_symlink():
+                    audio_disk_path.unlink()
+            except Exception as e:
+                logger.error("Failed to delete audio file %s: %s", audio_disk_path, e)
+                cleanup_errors.append("audio file")
+
+        if orig_path.exists():
+            try:
+                if not orig_path.is_symlink():
+                    orig_path.unlink()
+            except Exception as e:
+                logger.error("Failed to delete original transcript %s: %s", orig_path, e)
+                cleanup_errors.append("original transcript")
+
+        # Clean any temp files matching this story
+        try:
+            for tmp_file in TMP_DIR.glob(f"*{id}*"):
+                try:
+                    if not tmp_file.is_symlink() and tmp_file.exists():
+                        tmp_file.unlink()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # 7. Reconcile journal upon successful disk cleanup
+        if not cleanup_errors:
+            with get_db() as conn:
+                conn.execute("DELETE FROM deletion_journal WHERE id = ?;", (journal_id,))
+            return {
+                "deleted": True,
+                "story_id": id,
+                "message": "Story, transcript segments, memory cards, and original audio were permanently deleted.",
+            }
+        else:
             return JSONResponse(
-                status_code=409,
+                status_code=500,
                 content={
                     "error": {
-                        "code": "JOB_ACTIVE",
-                        "message": f"Cannot delete story while a {active_job['kind']} job ({active_job['id']}) is actively running.",
+                        "code": "DELETE_INCOMPLETE",
+                        "message": f"Story metadata was removed, but cleanup of local media files was incomplete ({', '.join(cleanup_errors)}). Cleanup has been journaled and will be retried automatically.",
                     }
                 },
             )
-
-        # 3. Locate media file and boundary verify
-        audio_relpath = story["audio_relpath"]
-        audio_disk_path = (DATA_DIR / audio_relpath).resolve()
-        try:
-            audio_disk_path.relative_to(MEDIA_DIR.resolve())
-        except ValueError:
-            return JSONResponse(
-                status_code=403,
-                content={"error": {"code": "FORBIDDEN", "message": "Access to path outside media directory is denied."}},
-            )
-
-        # 4. Delete SQLite story record (Cascading foreign keys delete segments, cards, sources, jobs)
-        conn.execute("DELETE FROM stories WHERE id = ?;", (id,))
-
-    # 5. Delete private filesystem files
-    cleanup_errors = []
-    if audio_disk_path.exists():
-        try:
-            audio_disk_path.unlink()
-        except Exception as e:
-            logger.error("Failed to delete audio file %s: %s", audio_disk_path, e)
-            cleanup_errors.append("audio file")
-
-    orig_path = ORIGINAL_TRANSCRIPTS_DIR / f"{id}.json"
-    if orig_path.exists():
-        try:
-            orig_path.unlink()
-        except Exception as e:
-            logger.error("Failed to delete original transcript %s: %s", orig_path, e)
-            cleanup_errors.append("original transcript")
-
-    # Clean any temp files matching this story
-    try:
-        for tmp_file in TMP_DIR.glob(f"*{id}*"):
-            try:
-                tmp_file.unlink()
-            except Exception:
-                pass
-    except Exception:
-        pass
-
-    if cleanup_errors:
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": {
-                    "code": "DELETE_INCOMPLETE",
-                    "message": "Story metadata was removed, but cleanup of local media files was incomplete.",
-                }
-            },
-        )
-
-    return {
-        "deleted": True,
-        "story_id": id,
-        "message": "Story, transcript segments, memory cards, and original audio were permanently deleted.",
-    }
 
 
 # Transcription Initiation Endpoint
@@ -996,7 +1089,7 @@ async def confirm_story_review(id: str) -> Dict[str, Any]:
 # Memory Extraction Initiation Endpoint
 class ExtractMemoriesRequest(BaseModel):
     expected_revision: Optional[int] = Field(None, ge=1)
-    require_review: Optional[bool] = Field(False)
+    require_review: Optional[bool] = Field(None)
 
 
 @app.post("/api/stories/{id}/extract", status_code=202)
@@ -1006,12 +1099,22 @@ async def start_memory_extraction(
 ) -> Dict[str, Any]:
     """
     Start asynchronous grounded memory extraction using local Qwen2.5.
-    Requires an eligible story with a completed transcript.
-    Optionally enforces prior human review verification if require_review is True.
+    Requires an eligible story with a completed, human-reviewed transcript.
+    Strictly enforces prior human review verification at the backend boundary.
+    Any attempt to bypass the review requirement (e.g. require_review=False) is rejected.
     """
+    if payload and payload.require_review is False:
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": {
+                    "code": "REVIEW_BYPASS_FORBIDDEN",
+                    "message": "Bypassing transcript review is forbidden. Transcript must be confirmed before extraction.",
+                }
+            },
+        )
     expected_rev = payload.expected_revision if payload else None
-    req_review = bool(payload.require_review) if payload and payload.require_review is not None else False
-    job_info = global_worker.enqueue_extraction(id, expected_revision=expected_rev, require_review=req_review)
+    job_info = global_worker.enqueue_extraction(id, expected_revision=expected_rev, require_review=True)
     return job_info
 
 

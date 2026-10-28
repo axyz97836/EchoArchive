@@ -37,8 +37,8 @@ def phase_c_env(tmp_path: Path):
             INSERT INTO stories (
                 id, title, speaker_label, consent_confirmed_at, audio_relpath,
                 audio_media_type, audio_size_bytes, audio_duration_ms,
-                transcript_revision, created_at, updated_at
-            ) VALUES (?, 'Arthur Sailboat Story', 'Arthur', '2026-10-28T00:00:00Z', ?, 'audio/wav', 1024, 18600, 1, '2026-10-28T00:00:00Z', '2026-10-28T00:00:00Z');
+                transcript_revision, transcript_reviewed_at, created_at, updated_at
+            ) VALUES (?, 'Arthur Sailboat Story', 'Arthur', '2026-10-28T00:00:00Z', ?, 'audio/wav', 1024, 18600, 1, '2026-10-28T00:00:00Z', '2026-10-28T00:00:00Z', '2026-10-28T00:00:00Z');
             """,
             (story_id, f"media/{story_id}.wav")
         )
@@ -365,7 +365,10 @@ def test_stale_memory_flag_and_regeneration(phase_c_env):
         assert card["generated_from_revision"] == 1
         assert "Transcript has been modified" in card["stale_reason"]
 
-        # Step 4: Regenerate for Revision 2
+        # Step 4: Confirm review of revision 2 and regenerate
+        with get_db(db_file) as conn:
+            conn.execute("UPDATE stories SET transcript_reviewed_at = '2026-10-28T00:01:00Z' WHERE id = ?;", (story_id,))
+
         mock_rev2_cards = [
             RawMemoryCard(
                 title="Updated Revision 2 Memory",

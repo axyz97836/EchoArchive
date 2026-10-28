@@ -24,10 +24,11 @@ client = TestClient(app)
 
 @pytest.fixture(autouse=True)
 def setup_test_directories():
-    """Ensure clean directories before tests."""
+    """Ensure clean directories and up-to-date schema before tests."""
     MEDIA_DIR.mkdir(parents=True, exist_ok=True)
     ORIGINAL_TRANSCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
     TMP_DIR.mkdir(parents=True, exist_ok=True)
+    init_db()
     yield
 
 

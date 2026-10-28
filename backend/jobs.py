@@ -15,7 +15,7 @@ from backend.config import (
     ORIGINAL_TRANSCRIPTS_DIR,
     TMP_DIR,
 )
-from backend.database import get_db
+from backend.database import get_db, recover_pending_deletions
 from backend.evidence import (
     EvidenceValidationError,
     GroundedMemoryCard,
@@ -75,8 +75,28 @@ def recover_interrupted_jobs(db_path: Optional[Path] = None) -> int:
     """
     On startup or recovery, find any stranded jobs in 'queued' or 'running' states
     and mark them as failed with code INTERRUPTED.
+    Also recovers any incomplete deletion journal entries and purges temporary files.
     Returns the count of recovered jobs.
     """
+    # 1. Recover any incomplete story deletions from durable journal
+    try:
+        recover_pending_deletions(db_path)
+    except Exception as e:
+        logger.error("Failed to recover pending deletions during startup: %s", e)
+
+    # 2. Clean orphaned temporary artifacts
+    try:
+        if TMP_DIR.exists():
+            for tmp_file in TMP_DIR.glob("*"):
+                if tmp_file.is_file() and not tmp_file.is_symlink():
+                    try:
+                        tmp_file.unlink()
+                    except OSError:
+                        pass
+    except Exception as e:
+        logger.error("Failed to clean TMP_DIR on startup: %s", e)
+
+    # 3. Mark stranded jobs interrupted
     now_utc = datetime.now(timezone.utc).isoformat()
     with get_db(db_path) as conn:
         cursor = conn.execute(
@@ -117,6 +137,15 @@ class TranscriptionWorker:
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
+        self._story_locks: Dict[str, threading.Lock] = {}
+        self._story_locks_mutex = threading.Lock()
+
+    def get_story_lock(self, story_id: str) -> threading.Lock:
+        """Provide a per-story lock to prevent concurrent worker execution and deletion."""
+        with self._story_locks_mutex:
+            if story_id not in self._story_locks:
+                self._story_locks[story_id] = threading.Lock()
+            return self._story_locks[story_id]
 
     def start(self) -> None:
         """Start the background worker thread."""
@@ -213,12 +242,12 @@ class TranscriptionWorker:
         self,
         story_id: str,
         expected_revision: Optional[int] = None,
-        require_review: bool = False,
+        require_review: bool = True,
     ) -> Dict[str, Any]:
         """
         Validate preconditions and queue a memory extraction job for a story.
         Requires existing transcript (revision >= 1 and existing segments).
-        If require_review is True, rejects unreviewed stories.
+        Enforces human review verification (require_review defaults to True).
         """
         with get_db(self.db_path) as conn:
             # 1. Verify story exists
@@ -321,19 +350,21 @@ class TranscriptionWorker:
                 self._queue.task_done()
 
     def _process_job(self, job_id: str) -> None:
-        """Dispatch a single job to the appropriate handler based on kind."""
+        """Dispatch a single job to the appropriate handler based on kind with concurrency barrier."""
         with get_db(self.db_path) as conn:
             job = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
             if not job:
                 logger.error("Job %s not found in database.", job_id)
                 return
+            story_id = job["story_id"]
 
-        if job["kind"] == "transcribe":
-            self._process_transcription_job(job_id)
-        elif job["kind"] == "extract":
-            self._process_extraction_job(job_id)
-        else:
-            self._fail_job(job_id, "UNKNOWN_JOB_KIND", f"Unknown job kind: {job['kind']}")
+        with self.get_story_lock(story_id):
+            if job["kind"] == "transcribe":
+                self._process_transcription_job(job_id)
+            elif job["kind"] == "extract":
+                self._process_extraction_job(job_id)
+            else:
+                self._fail_job(job_id, "UNKNOWN_JOB_KIND", f"Unknown job kind: {job['kind']}")
 
     def _process_transcription_job(self, job_id: str) -> None:
         """Process a single transcription job through its documented stages."""
@@ -603,11 +634,11 @@ class TranscriptionWorker:
                     (seg_id, story_id, seg.segment_index, seg.start_ms, seg.end_ms, seg.text)
                 )
 
-            # Set initial transcript_revision to 1
+            # Set initial transcript_revision to 1 and ensure machine transcripts start unreviewed
             conn.execute(
                 """
                 UPDATE stories
-                SET transcript_revision = 1, updated_at = ?
+                SET transcript_revision = 1, transcript_reviewed_at = NULL, updated_at = ?
                 WHERE id = ?;
                 """,
                 (now_utc, story_id)
