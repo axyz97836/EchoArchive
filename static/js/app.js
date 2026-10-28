@@ -37,6 +37,7 @@
     navHomeBtn: document.getElementById("navHomeBtn"),
     navRecordBtn: document.getElementById("navRecordBtn"),
     navArchiveBtn: document.getElementById("navArchiveBtn"),
+    navPrivacyBtn: document.getElementById("navPrivacyBtn"),
     brandHomeLink: document.getElementById("brandHomeLink"),
     statusDot: document.getElementById("statusDot"),
     statusLabel: document.getElementById("statusLabel"),
@@ -89,6 +90,8 @@
     reviewStateBadge: document.getElementById("reviewStateBadge"),
     confirmReviewBtn: document.getElementById("confirmReviewBtn"),
     proceedToExtractBtn: document.getElementById("proceedToExtractBtn"),
+    transcriptExportBtn: document.getElementById("transcriptExportBtn"),
+    transcriptDeleteBtn: document.getElementById("transcriptDeleteBtn"),
     transcribeJobBanner: document.getElementById("transcribeJobBanner"),
     transcribeJobMsg: document.getElementById("transcribeJobMsg"),
     transcriptSegmentsList: document.getElementById("transcriptSegmentsList"),
@@ -109,6 +112,11 @@
     screenArchive: document.getElementById("screenArchive"),
     storiesCountLabel: document.getElementById("storiesCountLabel"),
     archiveSearchInput: document.getElementById("archiveSearchInput"),
+    searchResultsSection: document.getElementById("searchResultsSection"),
+    searchResultsHeading: document.getElementById("searchResultsHeading"),
+    searchResultsSub: document.getElementById("searchResultsSub"),
+    searchResultsList: document.getElementById("searchResultsList"),
+    clearSearchBtn: document.getElementById("clearSearchBtn"),
     archiveEmptyState: document.getElementById("archiveEmptyState"),
     emptyRecordBtn: document.getElementById("emptyRecordBtn"),
     storiesGrid: document.getElementById("storiesGrid"),
@@ -118,9 +126,20 @@
     backToTranscriptBtn: document.getElementById("backToTranscriptBtn"),
     memoriesStoryMeta: document.getElementById("memoriesStoryMeta"),
     regenerateMemoriesBtn: document.getElementById("regenerateMemoriesBtn"),
+    memoriesExportBtn: document.getElementById("memoriesExportBtn"),
+    memoriesDeleteBtn: document.getElementById("memoriesDeleteBtn"),
     staleCardsBanner: document.getElementById("staleCardsBanner"),
     bannerRegenerateBtn: document.getElementById("bannerRegenerateBtn"),
     memoryCardsList: document.getElementById("memoryCardsList"),
+
+    // Modals
+    deleteConfirmModal: document.getElementById("deleteConfirmModal"),
+    deleteStoryTitleLabel: document.getElementById("deleteStoryTitleLabel"),
+    deleteConfirmCheckbox: document.getElementById("deleteConfirmCheckbox"),
+    cancelDeleteBtn: document.getElementById("cancelDeleteBtn"),
+    confirmDeleteBtn: document.getElementById("confirmDeleteBtn"),
+    privacyModal: document.getElementById("privacyModal"),
+    closePrivacyBtn: document.getElementById("closePrivacyBtn"),
   };
 
   // Helper Utilities
@@ -567,8 +586,23 @@
       `;
     }
 
-    // Enable memory extraction if segments exist
-    el.proceedToExtractBtn.disabled = state.segments.length === 0;
+    // Enable memory extraction only if segments exist AND transcript is confirmed reviewed
+    const canExtract = state.segments.length > 0 && !!story.is_reviewed;
+    el.proceedToExtractBtn.disabled = !canExtract;
+    if (!story.is_reviewed && state.segments.length > 0) {
+      el.proceedToExtractBtn.title = "Review and confirm the transcript above before finding moments.";
+    } else if (state.segments.length === 0) {
+      el.proceedToExtractBtn.title = "Transcript segments required.";
+    } else {
+      el.proceedToExtractBtn.title = "Find meaningful moments grounded in the transcript.";
+    }
+
+    if (el.transcriptExportBtn) {
+      el.transcriptExportBtn.onclick = () => exportStoryZip(story.id);
+    }
+    if (el.transcriptDeleteBtn) {
+      el.transcriptDeleteBtn.onclick = () => openDeleteModal(story.id, story.title, el.transcriptDeleteBtn);
+    }
 
     renderSegmentsList();
   }
@@ -679,8 +713,8 @@
           seg.text = newText;
           seg.user_edited = 1;
           state.currentStory.transcript_revision = data.transcript_revision;
-          state.currentStory.is_reviewed = true;
-          showToast("Correction saved. Transcript revision incremented.", "success");
+          state.currentStory.is_reviewed = false;
+          showToast("Correction saved. Review confirmation invalidated until re-confirmed.", "success");
           renderTranscriptWorkspace();
         } catch (err) {
           showToast(err.message, "error");
@@ -817,7 +851,9 @@
     el.extractErrCode.textContent = code || "EXTRACTION_FAILED";
     let message = msg || "An error occurred during local memory extraction.";
 
-    if (code === "OLLAMA_UNAVAILABLE") {
+    if (code === "REVIEW_REQUIRED" || code === "REVIEW_BYPASS_FORBIDDEN") {
+      message = "Transcript must be confirmed by human review before memory extraction. Please return to the transcript workspace and confirm review.";
+    } else if (code === "OLLAMA_UNAVAILABLE") {
       message = "Ollama is not running at 127.0.0.1:11434. Please start Ollama locally.";
     } else if (code === "MODEL_NOT_FOUND") {
       message = "Model qwen2.5:1.5b is missing. Run 'ollama pull qwen2.5:1.5b'.";
@@ -831,6 +867,11 @@
 
   async function triggerMemoryExtraction() {
     if (!state.currentStoryId) return;
+    if (!state.currentStory?.is_reviewed) {
+      showToast("Transcript review confirmation is required before extracting memories.", "error");
+      loadStoryWorkspace(state.currentStoryId);
+      return;
+    }
     navigateTo("screenExtracting");
     el.extractionErrorBox.style.display = "none";
     el.retryExtractionBtn.style.display = "none";
@@ -926,6 +967,33 @@
         </div>
       `;
 
+      const actionsRow = document.createElement("div");
+      actionsRow.className = "story-card-actions";
+      actionsRow.innerHTML = `
+        <button type="button" class="btn-action-icon btn-export-zip" title="Export story as portable ZIP archive">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+          Export ZIP
+        </button>
+        <button type="button" class="btn-action-icon btn-action-delete btn-delete-story" title="Permanently delete story">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+          Delete
+        </button>
+      `;
+
+      const expBtn = actionsRow.querySelector(".btn-export-zip");
+      expBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        exportStoryZip(story.id);
+      });
+
+      const delBtn = actionsRow.querySelector(".btn-delete-story");
+      delBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openDeleteModal(story.id, story.title, delBtn);
+      });
+
+      card.appendChild(actionsRow);
+
       const openStory = () => {
         if (memoryCount > 0) {
           loadMemoriesScreen(story.id);
@@ -981,6 +1049,13 @@
       el.staleCardsBanner.style.display = "flex";
     } else {
       el.staleCardsBanner.style.display = "none";
+    }
+
+    if (el.memoriesExportBtn) {
+      el.memoriesExportBtn.onclick = () => exportStoryZip(story.id);
+    }
+    if (el.memoriesDeleteBtn) {
+      el.memoriesDeleteBtn.onclick = () => openDeleteModal(story.id, story.title, el.memoriesDeleteBtn);
     }
 
     el.memoryCardsList.innerHTML = "";
@@ -1167,6 +1242,247 @@
       .replace(/'/g, "&#039;");
   }
 
+  // Phase E: Story Export
+  function exportStoryZip(storyId) {
+    if (!storyId) return;
+    showToast("Preparing story export archive...", "info");
+    const a = document.createElement("a");
+    a.href = `/api/stories/${storyId}/export`;
+    a.download = `echoarchive-${storyId}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => a.remove(), 100);
+  }
+
+  // Phase E: Safe Story Deletion Dialog & Execution
+  let pendingDeleteStoryId = null;
+  let deleteRestoreFocusEl = null;
+
+  function openDeleteModal(storyId, storyTitle, triggerEl = null) {
+    pendingDeleteStoryId = storyId;
+    deleteRestoreFocusEl = triggerEl || document.activeElement;
+    if (el.deleteStoryTitleLabel) {
+      el.deleteStoryTitleLabel.textContent = storyTitle ? `"${storyTitle}"` : "this story";
+    }
+    if (el.deleteConfirmCheckbox) {
+      el.deleteConfirmCheckbox.checked = false;
+    }
+    if (el.confirmDeleteBtn) {
+      el.confirmDeleteBtn.disabled = true;
+    }
+    if (el.deleteConfirmModal) {
+      el.deleteConfirmModal.style.display = "flex";
+      el.deleteConfirmCheckbox.focus();
+    }
+  }
+
+  function closeDeleteModal() {
+    pendingDeleteStoryId = null;
+    if (el.deleteConfirmModal) {
+      el.deleteConfirmModal.style.display = "none";
+    }
+    if (deleteRestoreFocusEl && typeof deleteRestoreFocusEl.focus === "function") {
+      deleteRestoreFocusEl.focus();
+    }
+  }
+
+  async function executeStoryDeletion() {
+    if (!pendingDeleteStoryId) return;
+    const storyId = pendingDeleteStoryId;
+    try {
+      if (el.confirmDeleteBtn) el.confirmDeleteBtn.disabled = true;
+      const res = await fetch(`/api/stories/${storyId}?confirm=true`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error?.message || "Failed to delete story.");
+      }
+      showToast("Story and local media permanently deleted.", "success");
+      closeDeleteModal();
+      if (state.currentStoryId === storyId) {
+        state.currentStoryId = null;
+        state.currentStory = null;
+        state.segments = [];
+        state.memoryCards = [];
+      }
+      loadStoryArchive();
+    } catch (err) {
+      showToast(err.message, "error");
+      if (el.confirmDeleteBtn) el.confirmDeleteBtn.disabled = false;
+    }
+  }
+
+  // Phase E: Privacy Modal
+  let privacyRestoreFocusEl = null;
+
+  function openPrivacyModal(triggerEl = null) {
+    privacyRestoreFocusEl = triggerEl || document.activeElement;
+    if (el.privacyModal) {
+      el.privacyModal.style.display = "flex";
+      if (el.closePrivacyBtn) el.closePrivacyBtn.focus();
+    }
+  }
+
+  function closePrivacyModal() {
+    if (el.privacyModal) {
+      el.privacyModal.style.display = "none";
+    }
+    if (privacyRestoreFocusEl && typeof privacyRestoreFocusEl.focus === "function") {
+      privacyRestoreFocusEl.focus();
+    }
+  }
+
+  // Phase E: Archive Search & Excerpt Highlighting
+  let searchDebounceTimer = null;
+
+  function highlightMatches(text, query) {
+    if (!text || !query) return escapeHtml(text || "");
+    const escapedText = escapeHtml(text);
+    const escapedQuery = escapeHtml(query).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const regex = new RegExp(`(${escapedQuery})`, "gi");
+    return escapedText.replace(regex, "<mark>$1</mark>");
+  }
+
+  async function handleArchiveSearch(query) {
+    const q = query.trim();
+    if (!q || q.length < 2) {
+      if (el.searchResultsSection) el.searchResultsSection.style.display = "none";
+      if (el.storiesGrid) el.storiesGrid.style.display = "grid";
+      renderStoriesGrid(state.stories);
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/search?q=${encodeURIComponent(q)}&limit=50`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error?.message || "Search failed.");
+      }
+      const data = await res.json();
+      renderSearchResults(data, q);
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+  }
+
+  function renderSearchResults(data, query) {
+    if (!el.searchResultsSection || !el.searchResultsList) return;
+
+    el.storiesGrid.style.display = "none";
+    el.archiveEmptyState.style.display = "none";
+    el.searchResultsSection.style.display = "block";
+
+    const total = data.total || 0;
+    el.searchResultsHeading.textContent = `Archive Search Results (${total})`;
+    el.searchResultsSub.textContent = total === 1
+      ? `1 match found for "${query}"`
+      : `${total} matches found across stories, transcripts, and memories for "${query}"`;
+
+    el.searchResultsList.innerHTML = "";
+
+    if (total === 0) {
+      el.searchResultsList.innerHTML = `
+        <div class="empty-state" style="padding: var(--space-xl) 0;">
+          <h3 class="empty-title" style="font-size: 1.15rem;">No matches found</h3>
+          <p class="empty-desc">No stories, transcript passages, or memory cards matched "${escapeHtml(query)}". Try another keyword.</p>
+        </div>
+      `;
+      announce(`No search results found for ${query}`);
+      return;
+    }
+
+    announce(`${total} search results found for ${query}`);
+
+    data.results.forEach((result) => {
+      const card = document.createElement("article");
+      card.className = "search-result-card";
+      card.tabIndex = 0;
+      card.role = "listitem";
+
+      let badgeHtml = "";
+      let detailHtml = "";
+
+      if (result.result_type === "story") {
+        badgeHtml = `<span class="result-badge result-badge-story">Story</span>`;
+        detailHtml = `
+          <div class="result-title">${highlightMatches(result.story_title, query)}</div>
+          <div class="result-meta-line">Narrator: ${escapeHtml(result.speaker_label || "Unknown Speaker")}</div>
+        `;
+      } else if (result.result_type === "transcript") {
+        const timeStr = formatTimestampMs(result.start_ms);
+        badgeHtml = `
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <span class="result-badge result-badge-transcript">Spoken Transcript Passage</span>
+            <span class="result-time-pill">[${timeStr}]</span>
+          </div>
+        `;
+        detailHtml = `
+          <div class="result-meta-line">Story: <strong>${escapeHtml(result.story_title)}</strong> &bull; ${escapeHtml(result.speaker_label || "Speaker")}</div>
+          <div class="result-snippet">${highlightMatches(result.snippet || result.text, query)}</div>
+        `;
+      } else if (result.result_type === "memory") {
+        const staleBadge = result.is_stale ? ` <span class="badge badge-warning" style="font-size: 0.7rem;">Stale</span>` : "";
+        badgeHtml = `
+          <div style="display: flex; gap: 6px; align-items: center;">
+            <span class="result-badge result-badge-memory">Traceable Memory</span>
+            ${staleBadge}
+          </div>
+        `;
+        const themesHtml = (result.themes || []).map(t => `<span class="theme-tag">${escapeHtml(t)}</span>`).join(" ");
+        detailHtml = `
+          <div class="result-title">${highlightMatches(result.card_title, query)}</div>
+          <div class="result-meta-line">Story: <strong>${escapeHtml(result.story_title)}</strong></div>
+          <div class="result-snippet">${highlightMatches(result.snippet || result.summary, query)}</div>
+          ${themesHtml ? `<div style="margin-top: 8px; display: flex; gap: 4px; flex-wrap: wrap;">${themesHtml}</div>` : ""}
+        `;
+      }
+
+      card.innerHTML = `
+        <div class="result-badge-row">
+          ${badgeHtml}
+          <span style="font-size: 0.75rem; color: var(--color-amber);">Open &rarr;</span>
+        </div>
+        ${detailHtml}
+      `;
+
+      const onSelect = () => {
+        if (result.result_type === "story") {
+          loadStoryWorkspace(result.story_id);
+        } else if (result.result_type === "transcript") {
+          loadStoryWorkspace(result.story_id).then(() => {
+            setTimeout(() => {
+              const segEl = document.getElementById(`seg-${result.segment_id}`);
+              if (segEl) {
+                segEl.scrollIntoView({ behavior: "smooth", block: "center" });
+                playAudioSegment(result.start_ms / 1000, result.end_ms / 1000, segEl);
+              }
+            }, 350);
+          });
+        } else if (result.result_type === "memory") {
+          loadMemoriesScreen(result.story_id);
+        }
+      };
+
+      card.addEventListener("click", onSelect);
+      card.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        }
+      });
+
+      el.searchResultsList.appendChild(card);
+    });
+  }
+
+  function clearSearchResults() {
+    if (el.archiveSearchInput) el.archiveSearchInput.value = "";
+    if (el.searchResultsSection) el.searchResultsSection.style.display = "none";
+    if (el.storiesGrid) el.storiesGrid.style.display = "grid";
+    renderStoriesGrid(state.stories);
+  }
+
   // Event Listeners Binding
   function bindEventListeners() {
     // Top Nav buttons
@@ -1294,16 +1610,51 @@
     });
     el.retryExtractionBtn.addEventListener("click", triggerMemoryExtraction);
 
-    // Screen 5: Search Filter
-    el.archiveSearchInput.addEventListener("input", (e) => {
-      const q = e.target.value.toLowerCase().trim();
-      const filtered = state.stories.filter((s) => {
-        return (
-          s.title.toLowerCase().includes(q) ||
-          (s.speaker_label && s.speaker_label.toLowerCase().includes(q))
-        );
+    // Screen 5: Search Filter with Local Full-Text API
+    if (el.archiveSearchInput) {
+      el.archiveSearchInput.addEventListener("input", (e) => {
+        clearTimeout(searchDebounceTimer);
+        searchDebounceTimer = setTimeout(() => {
+          handleArchiveSearch(e.target.value);
+        }, 250);
       });
-      renderStoriesGrid(filtered);
+    }
+
+    if (el.clearSearchBtn) {
+      el.clearSearchBtn.addEventListener("click", clearSearchResults);
+    }
+
+    // Phase E: Modals
+    if (el.navPrivacyBtn) {
+      el.navPrivacyBtn.addEventListener("click", () => openPrivacyModal(el.navPrivacyBtn));
+    }
+    if (el.closePrivacyBtn) {
+      el.closePrivacyBtn.addEventListener("click", closePrivacyModal);
+    }
+    if (el.cancelDeleteBtn) {
+      el.cancelDeleteBtn.addEventListener("click", closeDeleteModal);
+    }
+    if (el.deleteConfirmCheckbox) {
+      el.deleteConfirmCheckbox.addEventListener("change", (e) => {
+        if (el.confirmDeleteBtn) {
+          el.confirmDeleteBtn.disabled = !e.target.checked;
+        }
+      });
+    }
+    if (el.confirmDeleteBtn) {
+      el.confirmDeleteBtn.addEventListener("click", executeStoryDeletion);
+    }
+
+    // Global Modal Dismissal via Escape Key
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        if (el.deleteConfirmModal && el.deleteConfirmModal.style.display !== "none") {
+          closeDeleteModal();
+        }
+        if (el.privacyModal && el.privacyModal.style.display !== "none") {
+          closePrivacyModal();
+        }
+      }
     });
 
     // Screen 6: Navigation & Regeneration

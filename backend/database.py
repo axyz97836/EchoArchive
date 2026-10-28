@@ -1,12 +1,21 @@
 """SQLite database management and schema migrations for EchoArchive."""
 
+import logging
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Generator, Optional
+from typing import Generator, List, Optional
 
-from backend.config import DATABASE_PATH, DATA_DIR
+from backend.config import (
+    DATABASE_PATH,
+    DATA_DIR,
+    MEDIA_DIR,
+    ORIGINAL_TRANSCRIPTS_DIR,
+    TMP_DIR,
+)
+
+logger = logging.getLogger("echoarchive.database")
 
 SCHEMA_DDL = """
 PRAGMA foreign_keys = ON;
@@ -76,6 +85,14 @@ CREATE TABLE IF NOT EXISTS jobs (
     finished_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS deletion_journal (
+    id TEXT PRIMARY KEY,
+    story_id TEXT NOT NULL,
+    audio_relpath TEXT,
+    original_transcript_path TEXT,
+    created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS ix_segments_story_order
     ON transcript_segments(story_id, segment_index);
 CREATE INDEX IF NOT EXISTS ix_cards_story
@@ -131,9 +148,85 @@ def init_db(db_path: Optional[Path] = None) -> None:
             "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (3, ?);",
             (now_utc,)
         )
+
+        # Migration version 4: ensure deletion_journal table exists for crash-safe deletion recovery
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS deletion_journal (
+                id TEXT PRIMARY KEY,
+                story_id TEXT NOT NULL,
+                audio_relpath TEXT,
+                original_transcript_path TEXT,
+                created_at TEXT NOT NULL
+            );
+            """
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (4, ?);",
+            (now_utc,)
+        )
         conn.commit()
     finally:
         conn.close()
+
+
+def recover_pending_deletions(db_path: Optional[Path] = None) -> List[str]:
+    """
+    Inspect deletion_journal for interrupted or partially failed deletions,
+    perform filesystem cleanup of unlinked files, and remove completed journal entries.
+    Returns list of recovered story IDs.
+    """
+    recovered: List[str] = []
+    with get_db(db_path) as conn:
+        entries = conn.execute("SELECT * FROM deletion_journal;").fetchall()
+        for row in entries:
+            journal_id = row["id"]
+            story_id = row["story_id"]
+            audio_relpath = row["audio_relpath"]
+            orig_transcript = row["original_transcript_path"]
+
+            all_cleaned = True
+            if audio_relpath:
+                try:
+                    audio_p = (DATA_DIR / audio_relpath).resolve()
+                    audio_p.relative_to(MEDIA_DIR.resolve())
+                    if audio_p.is_symlink():
+                        logger.warning("Refusing to unlink symlink audio path %s", audio_p)
+                    elif audio_p.exists():
+                        audio_p.unlink()
+                except Exception as e:
+                    logger.error("Failed to delete journaled audio file for story %s: %s", story_id, e)
+                    all_cleaned = False
+
+            if orig_transcript:
+                try:
+                    orig_p = Path(orig_transcript).resolve()
+                    orig_p.relative_to(ORIGINAL_TRANSCRIPTS_DIR.resolve())
+                    if orig_p.is_symlink():
+                        logger.warning("Refusing to unlink symlink transcript path %s", orig_p)
+                    elif orig_p.exists():
+                        orig_p.unlink()
+                except Exception as e:
+                    logger.error("Failed to delete journaled transcript file for story %s: %s", story_id, e)
+                    all_cleaned = False
+
+            # Clean any temp files matching story_id
+            try:
+                for tmp_file in TMP_DIR.glob(f"*{story_id}*"):
+                    try:
+                        if not tmp_file.is_symlink() and tmp_file.exists():
+                            tmp_file.unlink()
+                    except OSError:
+                        pass
+            except Exception:
+                pass
+
+            if all_cleaned:
+                conn.execute("DELETE FROM deletion_journal WHERE id = ?;", (journal_id,))
+                recovered.append(story_id)
+                logger.info("Durable deletion journal completed and purged for story %s", story_id)
+
+    return recovered
 
 
 @contextmanager
