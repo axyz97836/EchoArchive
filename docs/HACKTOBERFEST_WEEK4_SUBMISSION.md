@@ -3,7 +3,6 @@ title: "EchoArchive: Preserving Authentic Spoken Memories with Local Speech & Gr
 published: false
 description: "A local-first application preserving real spoken stories through Traceable Memories—where open-weight AI serves as an indexer, not a storyteller."
 tags: devchallenge, hf26challenge
-canonical_url: https://github.com/axyz97836/EchoArchive
 ---
 
 *This article is submitted for the Hacktoberfest 2026 Week 4 Challenge: Ghost in the Machine (October 26–31, 2026).*
@@ -37,30 +36,37 @@ Every AI-generated memory card in EchoArchive is verifiably grounded in the spea
 
 ## Demo
 
-> **Demonstration Video:** *[Pending Final Video Recording & User Approval — URL will be placed here]*  
-> A complete timed narration and scene-by-scene recording plan using synthetic audio is documented in [`docs/DEMO_GUIDE_AND_SCRIPT.md`](https://github.com/axyz97836/EchoArchive/blob/develop/docs/DEMO_GUIDE_AND_SCRIPT.md).
+{% youtube zWXvw_L0HS4 %}
+
+[Watch the EchoArchive Demo](https://youtu.be/zWXvw_L0HS4)
+
+> **Duration:** 3:51.73 | **Resolution:** 1920 × 1080 (30 fps) | **Format:** H.264 / AAC stereo  
+> **Narration:** Synthetic local voiceover (macOS `Samantha`, 175 wpm, EBU R128 normalized)  
+> **Source Audio Playback:** Authentic fictional recording excerpt audible at 02:01 – 02:09.5  
+> **Export Note:** The video captures the genuine in-app ZIP export workflow; the resulting offline standalone `story.html` reader was verified independently with zero remote CDNs.  
+> A complete timed narration guide and scene-by-scene script using synthetic fixtures is documented in [`docs/DEMO_GUIDE_AND_SCRIPT.md`](https://github.com/axyz97836/EchoArchive/blob/develop/docs/DEMO_GUIDE_AND_SCRIPT.md).
 
 The complete EchoArchive user journey follows six coordinated screens designed in the archival **Archive After Dark** design system (Midnight Ink `#1B252B`, Aged Parchment `#F3E8D6`, Marigold Amber `#E5B65F`, and Muted Burgundy `#8C4B4A`):
 
 ### The 6-Screen Architecture
 
 1. **Home / Entry Screen:** Real-time health monitor displaying local speech engine, audio preprocessor, Ollama, and SQLite storage readiness.
-   ![Home Screen](https://raw.githubusercontent.com/axyz97836/EchoArchive/develop/docs/screenshots/01_home_screen.png)
+   ![Home Screen](https://raw.githubusercontent.com/axyz97836/EchoArchive/main/docs/screenshots/01_home_screen.png)
 
 2. **Microphone Studio & Ingest:** Live Web Audio API level metering on an HTML5 canvas, 5-minute duration limit, and affirmative consent confirmation.
-   ![Record & Upload Screen](https://raw.githubusercontent.com/axyz97836/EchoArchive/develop/docs/screenshots/02_record_upload_screen.png)
+   ![Record & Upload Screen](https://raw.githubusercontent.com/axyz97836/EchoArchive/main/docs/screenshots/02_record_upload_screen.png)
 
 3. **Transcript Review Workspace:** Chronological segments with timestamped audio seeking, inline human error correction, revision increments, and explicit review confirmation.
-   ![Transcript Review](https://raw.githubusercontent.com/axyz97836/EchoArchive/develop/docs/screenshots/05_transcript_review_screen.png)
+   ![Transcript Review](https://raw.githubusercontent.com/axyz97836/EchoArchive/main/docs/screenshots/05_transcript_review_screen.png)
 
 4. **Memory Extraction Stepper:** Real-time background job tracking through truthful stages (`queued` → `analyzing` → `validating` → `saving` → `succeeded`).
-   ![Extracting Memories](https://raw.githubusercontent.com/axyz97836/EchoArchive/develop/docs/screenshots/07_extracting_memories.png)
+   ![Extracting Memories](https://raw.githubusercontent.com/axyz97836/EchoArchive/main/docs/screenshots/07_extracting_memories.png)
 
 5. **Story Archive Library:** Preserved collection grid with real-time local search and verified memory counts.
-   ![Story Archive](https://raw.githubusercontent.com/axyz97836/EchoArchive/develop/docs/screenshots/03_story_archive_screen.png)
+   ![Story Archive](https://raw.githubusercontent.com/axyz97836/EchoArchive/main/docs/screenshots/03_story_archive_screen.png)
 
 6. **Traceable Memory Detail:** Interpretive summaries labeled with theme chips and authoritative spoken passages featuring click-to-seek audio playback.
-   ![Memory Detail](https://raw.githubusercontent.com/axyz97836/EchoArchive/develop/docs/screenshots/04_memory_detail_screen.png)
+   ![Memory Detail](https://raw.githubusercontent.com/axyz97836/EchoArchive/main/docs/screenshots/04_memory_detail_screen.png)
 
 *All demo screenshots and automated tests utilize synthetic, fictional test audio fixtures.*
 
@@ -139,6 +145,14 @@ EchoArchive was built from the ground up to solve the core architectural challen
   - `manifest.json` with SHA-256 member checksums (`echoarchive-export-v1`)
   - `story.html`: a standalone, responsive reader with inline CSS that plays the audio via relative path without remote CDNs, web fonts, or scripts.
 
+### 7. Lessons Learned: Security Hardening, Review Bypasses & CI Integrity
+
+During Phase F hardening and pre-release audits, several subtle architectural vulnerabilities and engineering lessons emerged:
+1. **The Review Bypass Trap:** A pre-flight audit revealed that `POST /api/stories/{id}/extract` accepted an optional `require_review: bool = false` flag in its schema. While intended for internal automated testing, exposing this parameter on public API endpoints created a loophole where callers could bypass human review. We eliminated this vulnerability by strictly requiring `transcript_reviewed_at IS NOT NULL` at the backend domain boundary, rejecting any bypass attempts with `422 REVIEW_BYPASS_FORBIDDEN`.
+2. **Filesystem vs. Database Atomicity:** In relational databases, rolling back a transaction cannot undo a deleted file on disk. Introducing the staged `deletion_journal` ensured that crash recovery can resume pending deletions cleanly on startup without leaving orphaned audio files or corrupting referential integrity.
+3. **CI Runner Isolation & Mocking:** GitHub Actions virtual environments lack Apple Metal hardware acceleration and GPU access. Establishing isolated synthetic audio fixtures, mocking subprocess executions with deterministic outputs in automated test harnesses, and tuning single-worker polling intervals allowed 115 deterministic unit and integration tests to execute in under 2 seconds in GitHub Actions CI, while live local speech recognition (`whisper.cpp`) and Ollama Qwen 2.5 extraction run on localhost.
+4. **Authentic Demonstration Verification:** Rather than relying on simulated mockups, the complete end-to-end workflow was recorded live via headless browser automation driving real inference on localhost, ensuring that every timestamp, UI transition, and model output reflected true runtime behavior.
+
 ---
 
 ## Why Does Open Innovation Matter?
@@ -167,21 +181,16 @@ In EchoArchive, the machine's role is not to replace the human, but to serve as 
 
 ---
 
-## Prize Categories
+## AI-Assisted Development & Media Disclosures
 
-EchoArchive is submitted for:
-
-- **Ghost in the Machine:** For creating an ethical, grounded oral history preservation system that honors authentic human voices without synthetic impersonation.
-- **Open Innovation:** For utilizing 100% open-weight models (`whisper.cpp` and `qwen2.5:1.5b`), local-first execution on consumer hardware, and open relational standards (SQLite, self-contained offline HTML).
-
----
-
-## AI-Assisted Development Disclosure
-
-In accordance with DEV and Hacktoberfest AI disclosure guidelines:
-- EchoArchive was designed and implemented through agentic pair programming with Google DeepMind's Antigravity coding assistant.
-- Antigravity assisted in architectural formulation, SQLite migration design, FastAPI route implementation, evidence validation rules, comprehensive test suite authoring, and documentation.
-- All code, database schemas, cryptographic checksums, and model integration pipelines were rigorously verified via 116 automated local tests, syntax compilation checks, and genuine local inference runs on Apple Silicon hardware.
+In accordance with DEV community standards and Hacktoberfest AI disclosure guidelines:
+- **Core Design & Human Consent:** EchoArchive is architected to preserve authentic, original recordings from consenting human speakers. The application rejects voice cloning, deepfake synthesis, and resurrective persona generation.
+- **Fictional Test Fixtures:** All demonstration audio files (*Aunt Clara's Maple Sugar Cabin* and *Echoes of the Ancient Olive Grove*) are 100% fictional synthetic recordings created strictly for software verification and demonstration, containing zero private, personal, or real-world family recordings.
+- **Automated Video Demonstration:** Demonstration video interactions were driven via headless Chromium automation (Playwright) operating against the live local application stack. All speech recognition (`whisper.cpp`) and memory extraction (Qwen 2.5) during the recorded run were executed live on localhost.
+- **Synthetic Voiceover:** Demonstration video narration was generated offline using macOS local speech synthesis (`Samantha`, `en_US` at 175 wpm) and normalized via FFmpeg EBU R128 loudness filtering. No human voice was mimicked or cloned.
+- **Export & Reader Verification:** The demonstration video captures the in-app portable ZIP export workflow; the extracted standalone offline `story.html` reader was verified independently in a separate test pass.
+- **AI Interpretations & Evidence Validation:** Extracted memory summaries and thematic tags represent machine interpretations generated by `qwen2.5:1.5b`. While EchoArchive's server-side Evidence Validator cryptographically guarantees that segment citations belong to the same story revision and quotations are verbatim, automated validation cannot guarantee that conceptual summaries are factually flawless or complete. Human review remains the ultimate authority.
+- **Code & Architecture Assistance:** EchoArchive was developed through agentic pair programming with Google DeepMind's Antigravity assistant, which assisted in architectural formulation, SQLite schema and migration design, FastAPI route implementation, evidence validation logic, test suite authoring, and documentation. All code, database schemas, and cryptographic checksums were verified via 116 automated local tests (115 deterministic unit and integration tests executing in under 2 seconds in CI plus genuine live local inference validation) with a 100% pass rate.
 
 ---
 
@@ -193,3 +202,4 @@ To maintain honesty and technical integrity:
 2. **SSD Physical Wear-Leveling:** File deletion unlinks filesystem pointers and removes database rows. On modern SSDs, underlying flash memory blocks are managed by hardware wear-leveling controllers and do not constitute certified cryptographic forensic erasure.
 3. **Sequential Job Concurrency:** Inference jobs are bounded by a single background worker (concurrency = 1) to prevent memory contention on 8 GiB RAM laptop environments.
 4. **Target Environment:** Verified on macOS 26.6.2 (Darwin arm64, Apple M2, 8 GiB RAM). Linux and Windows deployments require separate validation of whisper-cli and FFmpeg binary paths.
+5. **AI Interpretation Boundaries:** Language model extraction provides an organizing aid, not an infallible historical record. Users should always consult the original recorded audio and human-verified transcript as primary sources.
