@@ -3,6 +3,7 @@
 **Release Name:** EchoArchive v1.0.0 — Local-First Traceable Memories  
 **Challenge:** Hacktoberfest 2026, Week 4 — *Ghost in the Machine* (October 26–31, 2026)  
 **Repository:** [https://github.com/axyz97836/EchoArchive](https://github.com/axyz97836/EchoArchive)  
+**Demo Video:** [https://youtu.be/zWXvw_L0HS4](https://youtu.be/zWXvw_L0HS4)  
 **License:** MIT License  
 
 ---

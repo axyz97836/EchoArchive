@@ -54,7 +54,10 @@ tmp/
 temp/
 scratch/
 exports/
+demo-output/
 *.zip
+*.mp4
+*.mov
 
 # Logs
 *.log
